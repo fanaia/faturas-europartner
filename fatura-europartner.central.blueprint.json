@@ -1,0 +1,3636 @@
+{
+  "schemaVersion": "1.0.0",
+  "artifact": {
+    "name": "fatura-europartner.central.blueprint.json",
+    "status": "draft_for_inventory_and_homologation",
+    "createdAt": "2026-07-24",
+    "language": "pt-BR",
+    "sourceRepositories": [
+      "https://github.com/oondemand/fatura-personalizada-backend",
+      "https://github.com/oondemand/fatura-personalizada-frontend"
+    ],
+    "targetRepository": "https://github.com/fanaia/faturas-europartner",
+    "notes": [
+      "Este artefato descreve uma nova Central Oon e não uma refatoração incremental dos repositórios legados.",
+      "Os repositórios atuais permanecem como fonte das regras, testes de caracterização e rollback durante a migração.",
+      "As questões abertas precisam ser resolvidas no inventário antes do corte de produção."
+    ]
+  },
+  "central": {
+    "name": "Central Faturas Europartner",
+    "slug": "faturas-europartner",
+    "description": "Central Oon exclusiva para a Europartner, responsável por gerar faturas personalizadas a partir de Ordens de Serviço do Omie, aplicar regras por empresa e cliente, registrar cotação BACEN, anexar o documento na OS, enviar por e-mail e gerar o adiantamento da OS.",
+    "segment": "Serviços internacionais, faturamento e integração Omie",
+    "templateBase": [
+      "omie-sidecar",
+      "multi-moedas"
+    ],
+    "architecture": {
+      "runtime": "oonCore",
+      "tenancy": "single-tenant",
+      "organization": "Europartner",
+      "companyModel": "multiempresa",
+      "expectedOmieApps": 7,
+      "supportedCurrencies": [
+        "BRL",
+        "USD",
+        "EUR"
+      ],
+      "primaryBusinessObject": "Ordem de Serviço",
+      "deploymentUnit": "instância exclusiva"
+    },
+    "mvpGoal": "Processar com segurança e rastreabilidade a geração de faturas para as sete bases Omie da Europartner, com idempotência, documentos versionados, cotação BACEN imutável, anexação, e-mail, adiantamento e tratamento operacional de falhas.",
+    "productPositioning": "Projeto exclusivo para a Europartner; não é produto multi-tenant nem plataforma self-service de documentos."
+  },
+  "businessContext": {
+    "problem": [
+      "O Doc-Custom atual mantém autenticação, tenants, usuários, CRUDs, auditoria e frontend próprios, duplicando recursos disponíveis no oonCore.",
+      "O processamento disparado pelo webhook não possui fila operacional durável nem idempotência explícita para documento, anexo, e-mail e adiantamento.",
+      "A operação não possui visão central de faturas, tentativas, falhas, reprocessamentos e efeitos executados no Omie.",
+      "Templates EJS livres e credenciais Omie manipuladas pela aplicação ampliam os riscos de segurança e manutenção.",
+      "A Europartner é a única operação ativa, tornando desnecessária a generalização multi-tenant."
+    ],
+    "currentProcess": [
+      "O Omie envia OrdemServico.EtapaAlterada.",
+      "O sistema identifica a base pelo appKey e verifica a etapa configurada.",
+      "Consulta OS, cliente e país.",
+      "Carrega configurações, includes, modelos e cotações.",
+      "Renderiza assunto, corpo de e-mail e PDF.",
+      "Anexa a invoice na Ordem de Serviço.",
+      "Envia e-mail ao cliente com os anexos permitidos.",
+      "Marca parcelas para adiantamento quando configurado.",
+      "Move a OS para etapa de sucesso ou erro."
+    ],
+    "expectedOutcome": [
+      "Uma única Central exclusiva, com as sete empresas Omie isoladas por base.",
+      "Cada webhook persistido e deduplicado antes de qualquer efeito externo.",
+      "Processamento visível em esteira, com retry técnico e reprocessamento seletivo.",
+      "Documento, modelo e cotação congelados para auditoria.",
+      "Segredos fora do banco funcional e nunca expostos ao frontend ou logs.",
+      "Operação capaz de identificar e resolver falhas sem acesso ao código ou aos logs de infraestrutura."
+    ],
+    "mainRisks": [
+      "Dependências ocultas nos mais de quarenta modelos de fatura existentes.",
+      "Diferenças de regras, etapas, categoria e conta corrente entre as sete bases Omie.",
+      "Reenvio de webhook ou retry produzindo efeitos duplicados.",
+      "Envio ao cliente de anexos internos da Ordem de Serviço.",
+      "Alteração visual do PDF durante a migração do motor de templates.",
+      "Indisponibilidade temporária de Omie, BACEN ou provedor de e-mail."
+    ],
+    "successMetrics": [
+      {
+        "metric": "duplicidade_de_fatura",
+        "target": 0,
+        "unit": "ocorrências"
+      },
+      {
+        "metric": "duplicidade_de_adiantamento",
+        "target": 0,
+        "unit": "ocorrências"
+      },
+      {
+        "metric": "processamentos_rastreaveis",
+        "target": 100,
+        "unit": "%"
+      },
+      {
+        "metric": "segredos_expostos_frontend_ou_logs",
+        "target": 0,
+        "unit": "ocorrências"
+      },
+      {
+        "metric": "faturas_reprocessaveis_sem_repetir_etapas_concluidas",
+        "target": 100,
+        "unit": "%"
+      },
+      {
+        "metric": "bases_omie_homologadas",
+        "target": 7,
+        "unit": "bases"
+      }
+    ]
+  },
+  "assumptions": [
+    "A Europartner opera sete CNPJs, cada um com seu aplicativo e credencial Omie.",
+    "O escopo inicial trata somente Ordem de Serviço; Pedido de Venda e CRM não fazem parte do MVP.",
+    "Os modelos existentes serão inventariados e migrados por versão, sem edição de JavaScript ou EJS arbitrário pelo usuário final.",
+    "BRL utiliza fator 1; USD e EUR utilizam PTAX do BACEN, com possibilidade de ajuste fixo ou percentual governado.",
+    "O envio continuará utilizando provedor transacional de e-mail, inicialmente SendGrid.",
+    "A geração de adiantamento será configurável por empresa e perfil de faturamento."
+  ],
+  "usersAndProfiles": [
+    {
+      "profile": "administrador",
+      "label": "Administrador",
+      "description": "Administra empresas Omie, referências de segredos, perfis, modelos, regras, moedas, usuários e permissões."
+    },
+    {
+      "profile": "operacao_faturamento",
+      "label": "Operação de Faturamento",
+      "description": "Acompanha faturas, visualiza dados e documentos, corrige campos operacionais autorizados e executa reprocessamentos."
+    },
+    {
+      "profile": "gestor_faturamento",
+      "label": "Gestor de Faturamento",
+      "description": "Aprova exceções, publica modelos, autoriza reprocessamentos críticos e acompanha indicadores."
+    },
+    {
+      "profile": "auditoria_consulta",
+      "label": "Auditoria / Consulta",
+      "description": "Consulta faturas, cotações, documentos, eventos, integrações e trilha de auditoria sem alterar dados."
+    },
+    {
+      "profile": "processo_sistema",
+      "label": "Processo do Sistema",
+      "description": "Identidade técnica usada por webhook, filas, jobs e conectores; não possui acesso interativo."
+    }
+  ],
+  "collections": [
+    {
+      "name": "Empresa Omie",
+      "key": "empresas_omie",
+      "description": "Representa cada CNPJ e aplicativo Omie da Europartner. A Central é single-tenant, porém multiempresa.",
+      "source": "internal",
+      "primaryDisplayField": "nome",
+      "fields": [
+        {
+          "name": "nome",
+          "label": "Nome",
+          "type": "text",
+          "required": true,
+          "description": "Nome operacional da empresa ou base Omie.",
+          "readOnly": false,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": true
+        },
+        {
+          "name": "razaoSocial",
+          "label": "Razão Social",
+          "type": "text",
+          "required": true,
+          "description": "Razão social da empresa.",
+          "readOnly": false,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "cnpj",
+          "label": "CNPJ",
+          "type": "document",
+          "required": true,
+          "description": "CNPJ sem formatação no backend e mascarado na interface.",
+          "mask": "cnpj",
+          "readOnly": false,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": true
+        },
+        {
+          "name": "codigoInterno",
+          "label": "Código Interno",
+          "type": "text",
+          "required": true,
+          "description": "Código estável usado em regras, endpoint e integrações.",
+          "unique": true,
+          "readOnly": false,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": true
+        },
+        {
+          "name": "appKeyMasked",
+          "label": "App Key",
+          "type": "text",
+          "required": false,
+          "description": "Valor mascarado, somente leitura; nunca retornar a chave completa.",
+          "readOnly": true,
+          "showInList": false,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "secretRef",
+          "label": "Referência do Segredo",
+          "type": "secret_reference",
+          "required": true,
+          "description": "Referência em Kubernetes Secret ou cofre equivalente; não contém o appSecret.",
+          "readOnly": false,
+          "showInList": false,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "webhookTokenRef",
+          "label": "Referência do Token do Webhook",
+          "type": "secret_reference",
+          "required": true,
+          "description": "Segredo usado para autenticar ou validar o endpoint público.",
+          "readOnly": false,
+          "showInList": false,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "etapaEntradaPadrao",
+          "label": "Etapa de Entrada Padrão",
+          "type": "text",
+          "required": true,
+          "description": "Código da etapa Omie que inicia o faturamento.",
+          "readOnly": false,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": true
+        },
+        {
+          "name": "etapaSucessoPadrao",
+          "label": "Etapa de Sucesso Padrão",
+          "type": "text",
+          "required": true,
+          "description": "Código da etapa após conclusão integral.",
+          "readOnly": false,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "etapaErroPadrao",
+          "label": "Etapa de Erro Padrão",
+          "type": "text",
+          "required": true,
+          "description": "Código da etapa após esgotar retries automáticos.",
+          "readOnly": false,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "categoriaAdiantamento",
+          "label": "Categoria de Adiantamento",
+          "type": "text",
+          "required": false,
+          "description": "Código Omie usado nas parcelas de adiantamento.",
+          "readOnly": false,
+          "showInList": false,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "contaCorrenteAdiantamento",
+          "label": "Conta Corrente de Adiantamento",
+          "type": "text",
+          "required": false,
+          "description": "Código da conta corrente Omie usada no adiantamento.",
+          "readOnly": false,
+          "showInList": false,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "emailRemetente",
+          "label": "E-mail Remetente",
+          "type": "email",
+          "required": true,
+          "description": "Remetente padrão da empresa.",
+          "readOnly": false,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "nomeRemetente",
+          "label": "Nome do Remetente",
+          "type": "text",
+          "required": true,
+          "description": "Nome exibido no envio.",
+          "readOnly": false,
+          "showInList": false,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "emailCopiaPadrao",
+          "label": "Cópia Padrão",
+          "type": "email_list",
+          "required": false,
+          "description": "Cópias padrão da empresa.",
+          "readOnly": false,
+          "showInList": false,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "status",
+          "label": "Status",
+          "type": "status",
+          "required": true,
+          "description": "Controla o uso da base.",
+          "options": [
+            "Ativa",
+            "Inativa",
+            "Em homologação",
+            "Arquivada"
+          ],
+          "defaultValue": "Em homologação",
+          "readOnly": false,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": true
+        },
+        {
+          "name": "ultimaComunicacaoSucessoEm",
+          "label": "Última Comunicação com Sucesso",
+          "type": "datetime",
+          "required": false,
+          "description": "Último teste ou integração concluída.",
+          "readOnly": true,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "ultimoErroComunicacao",
+          "label": "Último Erro de Comunicação",
+          "type": "textarea",
+          "required": false,
+          "description": "Erro normalizado do último teste.",
+          "readOnly": true,
+          "showInList": false,
+          "showInForm": true,
+          "showInFilters": false
+        }
+      ],
+      "indexes": [
+        {
+          "fields": [
+            "cnpj"
+          ],
+          "unique": true
+        },
+        {
+          "fields": [
+            "codigoInterno"
+          ],
+          "unique": true
+        },
+        {
+          "fields": [
+            "status"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Perfil de Faturamento",
+      "key": "perfis_faturamento",
+      "description": "Concentra regras por empresa e cliente, incluindo modelo, idioma, moeda, impostos, e-mail, anexos e adiantamento.",
+      "source": "hybrid",
+      "primaryDisplayField": "nome",
+      "fields": [
+        {
+          "name": "nome",
+          "label": "Nome",
+          "type": "text",
+          "required": true,
+          "description": "Nome descritivo do perfil.",
+          "readOnly": false,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": true
+        },
+        {
+          "name": "empresaOmieId",
+          "label": "Empresa Omie",
+          "type": "relation",
+          "required": true,
+          "description": "Empresa à qual o perfil pertence.",
+          "relation": {
+            "collection": "empresas_omie",
+            "displayField": "nome"
+          },
+          "readOnly": false,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": true
+        },
+        {
+          "name": "codigoClienteOmie",
+          "label": "Código do Cliente no Omie",
+          "type": "text",
+          "required": true,
+          "description": "Identificador externo do cliente.",
+          "readOnly": false,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": true
+        },
+        {
+          "name": "nomeCliente",
+          "label": "Cliente",
+          "type": "text",
+          "required": true,
+          "description": "Nome sincronizado para facilitar a operação.",
+          "readOnly": true,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": true
+        },
+        {
+          "name": "modeloDocumentoId",
+          "label": "Modelo de Documento",
+          "type": "relation",
+          "required": true,
+          "description": "Modelo publicado usado na geração.",
+          "relation": {
+            "collection": "modelos_documento",
+            "displayField": "nome"
+          },
+          "readOnly": false,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": true
+        },
+        {
+          "name": "idioma",
+          "label": "Idioma",
+          "type": "select",
+          "required": true,
+          "description": "Idioma do documento e do e-mail.",
+          "options": [
+            "pt-BR",
+            "en-US",
+            "es-ES"
+          ],
+          "defaultValue": "pt-BR",
+          "readOnly": false,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": true
+        },
+        {
+          "name": "moeda",
+          "label": "Moeda",
+          "type": "select",
+          "required": true,
+          "description": "Moeda principal da fatura.",
+          "options": [
+            "BRL",
+            "USD",
+            "EUR"
+          ],
+          "defaultValue": "BRL",
+          "readOnly": false,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": true
+        },
+        {
+          "name": "dataReferenciaCotacao",
+          "label": "Data de Referência da Cotação",
+          "type": "select",
+          "required": true,
+          "description": "Regra para definir a data solicitada ao BACEN.",
+          "options": [
+            "Data da OS",
+            "Data de previsão da OS",
+            "Data do processamento"
+          ],
+          "defaultValue": "Data da OS",
+          "readOnly": false,
+          "showInList": false,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "tipoAjusteCotacao",
+          "label": "Tipo de Ajuste da Cotação",
+          "type": "select",
+          "required": true,
+          "description": "Forma de ajuste sobre a PTAX.",
+          "options": [
+            "Nenhum",
+            "Percentual",
+            "Valor fixo"
+          ],
+          "defaultValue": "Nenhum",
+          "readOnly": false,
+          "showInList": false,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "valorAjusteCotacao",
+          "label": "Ajuste da Cotação",
+          "type": "number",
+          "required": false,
+          "description": "Percentual ou valor fixo conforme o tipo.",
+          "defaultValue": 0,
+          "readOnly": false,
+          "showInList": false,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "regraImpostos",
+          "label": "Regra de Impostos",
+          "type": "json",
+          "required": false,
+          "description": "Parâmetros específicos usados no documento e validados pelo backend.",
+          "readOnly": false,
+          "showInList": false,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "destinatariosAdicionais",
+          "label": "Destinatários Adicionais",
+          "type": "email_list",
+          "required": false,
+          "description": "Destinatários além dos presentes na OS e no cliente.",
+          "readOnly": false,
+          "showInList": false,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "copias",
+          "label": "Cópias",
+          "type": "email_list",
+          "required": false,
+          "description": "Cópias do envio.",
+          "readOnly": false,
+          "showInList": false,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "politicaAnexos",
+          "label": "Política de Anexos",
+          "type": "select",
+          "required": true,
+          "description": "Define quais anexos da OS podem ser enviados.",
+          "options": [
+            "Somente fatura",
+            "Fatura e anexos permitidos",
+            "Fatura e anexos selecionados manualmente"
+          ],
+          "defaultValue": "Somente fatura",
+          "readOnly": false,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": true
+        },
+        {
+          "name": "tiposAnexoPermitidos",
+          "label": "Tipos de Anexo Permitidos",
+          "type": "multi_select",
+          "required": false,
+          "description": "Allowlist de extensões.",
+          "options": [
+            "pdf",
+            "xml",
+            "xlsx",
+            "docx",
+            "jpg",
+            "png"
+          ],
+          "readOnly": false,
+          "showInList": false,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "padroesNomeAnexoIncluidos",
+          "label": "Padrões de Nome Incluídos",
+          "type": "text_list",
+          "required": false,
+          "description": "Padrões aceitos para anexos externos.",
+          "readOnly": false,
+          "showInList": false,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "padroesNomeAnexoExcluidos",
+          "label": "Padrões de Nome Excluídos",
+          "type": "text_list",
+          "required": false,
+          "description": "Padrões internos que nunca podem ser enviados.",
+          "readOnly": false,
+          "showInList": false,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "gerarAdiantamento",
+          "label": "Gerar Adiantamento",
+          "type": "boolean",
+          "required": true,
+          "description": "Ativa a regra de adiantamento.",
+          "defaultValue": true,
+          "readOnly": false,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": true
+        },
+        {
+          "name": "etapaEntrada",
+          "label": "Etapa de Entrada Específica",
+          "type": "text",
+          "required": false,
+          "description": "Sobrescreve a etapa padrão da empresa.",
+          "readOnly": false,
+          "showInList": false,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "etapaSucesso",
+          "label": "Etapa de Sucesso Específica",
+          "type": "text",
+          "required": false,
+          "description": "Sobrescreve a etapa padrão da empresa.",
+          "readOnly": false,
+          "showInList": false,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "etapaErro",
+          "label": "Etapa de Erro Específica",
+          "type": "text",
+          "required": false,
+          "description": "Sobrescreve a etapa padrão da empresa.",
+          "readOnly": false,
+          "showInList": false,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "vigenteDesde",
+          "label": "Vigente Desde",
+          "type": "date",
+          "required": true,
+          "description": "Início de vigência.",
+          "defaultValue": "today",
+          "readOnly": false,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": true
+        },
+        {
+          "name": "vigenteAte",
+          "label": "Vigente Até",
+          "type": "date",
+          "required": false,
+          "description": "Fim opcional de vigência.",
+          "readOnly": false,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": true
+        },
+        {
+          "name": "status",
+          "label": "Status",
+          "type": "status",
+          "required": true,
+          "description": "Status do perfil.",
+          "options": [
+            "Rascunho",
+            "Ativo",
+            "Inativo",
+            "Arquivado"
+          ],
+          "defaultValue": "Rascunho",
+          "readOnly": false,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": true
+        }
+      ],
+      "indexes": [
+        {
+          "fields": [
+            "empresaOmieId",
+            "codigoClienteOmie",
+            "status"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Modelo de Documento",
+      "key": "modelos_documento",
+      "description": "Identidade lógica do modelo de fatura e e-mail. O conteúdo publicado é mantido em versões imutáveis.",
+      "source": "internal",
+      "primaryDisplayField": "nome",
+      "fields": [
+        {
+          "name": "codigo",
+          "label": "Código",
+          "type": "text",
+          "required": true,
+          "description": "Código único e estável.",
+          "unique": true,
+          "readOnly": false,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": true
+        },
+        {
+          "name": "nome",
+          "label": "Nome",
+          "type": "text",
+          "required": true,
+          "description": "Nome funcional do modelo.",
+          "readOnly": false,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": true
+        },
+        {
+          "name": "descricao",
+          "label": "Descrição",
+          "type": "textarea",
+          "required": false,
+          "description": "Objetivo e particularidades.",
+          "readOnly": false,
+          "showInList": false,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "idiomasSuportados",
+          "label": "Idiomas",
+          "type": "multi_select",
+          "required": true,
+          "description": "Idiomas disponíveis.",
+          "options": [
+            "pt-BR",
+            "en-US",
+            "es-ES"
+          ],
+          "readOnly": false,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": true
+        },
+        {
+          "name": "versaoPublicadaId",
+          "label": "Versão Publicada",
+          "type": "relation",
+          "required": false,
+          "description": "Versão ativa para novas gerações.",
+          "relation": {
+            "collection": "versoes_modelo_documento",
+            "displayField": "versao"
+          },
+          "readOnly": true,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "quantidadeVersoes",
+          "label": "Quantidade de Versões",
+          "type": "calculated",
+          "required": false,
+          "description": "Total de versões.",
+          "readOnly": true,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "status",
+          "label": "Status",
+          "type": "status",
+          "required": true,
+          "description": "Estado do modelo lógico.",
+          "options": [
+            "Ativo",
+            "Inativo",
+            "Arquivado"
+          ],
+          "defaultValue": "Ativo",
+          "readOnly": false,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": true
+        }
+      ]
+    },
+    {
+      "name": "Versão de Modelo de Documento",
+      "key": "versoes_modelo_documento",
+      "description": "Versão imutável do documento e e-mail. Rascunhos podem ser editados; versões publicadas não podem ser alteradas.",
+      "source": "migration_and_internal",
+      "primaryDisplayField": "versao",
+      "fields": [
+        {
+          "name": "modeloDocumentoId",
+          "label": "Modelo",
+          "type": "relation",
+          "required": true,
+          "description": "Modelo lógico.",
+          "relation": {
+            "collection": "modelos_documento",
+            "displayField": "nome"
+          },
+          "readOnly": false,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": true
+        },
+        {
+          "name": "versao",
+          "label": "Versão",
+          "type": "text",
+          "required": true,
+          "description": "Identificador semântico ou sequencial.",
+          "readOnly": false,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": true
+        },
+        {
+          "name": "idioma",
+          "label": "Idioma",
+          "type": "select",
+          "required": true,
+          "description": "Idioma desta versão.",
+          "options": [
+            "pt-BR",
+            "en-US",
+            "es-ES"
+          ],
+          "readOnly": false,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": true
+        },
+        {
+          "name": "motor",
+          "label": "Motor de Template",
+          "type": "select",
+          "required": true,
+          "description": "Motor controlado de renderização.",
+          "options": [
+            "template-seguro",
+            "ejs-legado-somente-leitura"
+          ],
+          "defaultValue": "template-seguro",
+          "readOnly": false,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": true
+        },
+        {
+          "name": "conteudoDocumento",
+          "label": "Conteúdo do Documento",
+          "type": "document_template",
+          "required": true,
+          "description": "Template do PDF usando somente variáveis permitidas.",
+          "readOnly": false,
+          "showInList": false,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "estilos",
+          "label": "Estilos",
+          "type": "document_style",
+          "required": false,
+          "description": "Estilos sanitizados e aprovados.",
+          "readOnly": false,
+          "showInList": false,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "assuntoEmail",
+          "label": "Assunto do E-mail",
+          "type": "template_text",
+          "required": true,
+          "description": "Assunto parametrizado.",
+          "readOnly": false,
+          "showInList": false,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "corpoEmail",
+          "label": "Corpo do E-mail",
+          "type": "template_html",
+          "required": true,
+          "description": "HTML sanitizado do e-mail.",
+          "readOnly": false,
+          "showInList": false,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "variaveisPermitidas",
+          "label": "Variáveis Permitidas",
+          "type": "json",
+          "required": true,
+          "description": "Contrato de variáveis validado antes da publicação.",
+          "readOnly": false,
+          "showInList": false,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "assets",
+          "label": "Imagens e Arquivos",
+          "type": "attachments",
+          "required": false,
+          "description": "Logotipos e recursos do modelo.",
+          "readOnly": false,
+          "showInList": false,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "hashConteudo",
+          "label": "Hash do Conteúdo",
+          "type": "text",
+          "required": false,
+          "description": "Hash calculado para integridade.",
+          "readOnly": true,
+          "showInList": false,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "status",
+          "label": "Status",
+          "type": "status",
+          "required": true,
+          "description": "Fluxo de publicação.",
+          "options": [
+            "Rascunho",
+            "Em homologação",
+            "Publicado",
+            "Substituído",
+            "Arquivado"
+          ],
+          "defaultValue": "Rascunho",
+          "readOnly": false,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": true
+        },
+        {
+          "name": "publicadoEm",
+          "label": "Publicado Em",
+          "type": "datetime",
+          "required": false,
+          "description": "Data da publicação.",
+          "readOnly": true,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "publicadoPor",
+          "label": "Publicado Por",
+          "type": "relation",
+          "required": false,
+          "description": "Usuário responsável.",
+          "relation": {
+            "collection": "core_users",
+            "displayField": "name"
+          },
+          "readOnly": true,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "modeloLegadoId",
+          "label": "ID Legado",
+          "type": "text",
+          "required": false,
+          "description": "ID de origem usado na migração.",
+          "readOnly": true,
+          "showInList": false,
+          "showInForm": true,
+          "showInFilters": false
+        }
+      ]
+    },
+    {
+      "name": "Cotação de Moeda",
+      "key": "cotacoes_moeda",
+      "description": "Snapshot da cotação oficial ou ajustada usada na fatura.",
+      "source": "integration",
+      "primaryDisplayField": "chaveCotacao",
+      "fields": [
+        {
+          "name": "chaveCotacao",
+          "label": "Chave",
+          "type": "text",
+          "required": true,
+          "description": "moeda:dataSolicitada:tipoBoletim.",
+          "unique": true,
+          "readOnly": true,
+          "showInList": false,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "moeda",
+          "label": "Moeda",
+          "type": "select",
+          "required": true,
+          "description": "Moeda consultada.",
+          "options": [
+            "BRL",
+            "USD",
+            "EUR"
+          ],
+          "readOnly": false,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": true
+        },
+        {
+          "name": "dataSolicitada",
+          "label": "Data Solicitada",
+          "type": "date",
+          "required": true,
+          "description": "Data de referência da regra.",
+          "readOnly": false,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": true
+        },
+        {
+          "name": "dataEfetiva",
+          "label": "Data Efetiva",
+          "type": "date",
+          "required": true,
+          "description": "Data publicada efetivamente usada.",
+          "readOnly": true,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": true
+        },
+        {
+          "name": "tipoBoletim",
+          "label": "Tipo de Boletim",
+          "type": "text",
+          "required": true,
+          "description": "Preferencialmente Fechamento PTAX.",
+          "readOnly": true,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "cotacaoCompra",
+          "label": "Cotação de Compra",
+          "type": "decimal",
+          "required": true,
+          "description": "Valor oficial.",
+          "readOnly": true,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "cotacaoVenda",
+          "label": "Cotação de Venda",
+          "type": "decimal",
+          "required": true,
+          "description": "Valor oficial.",
+          "readOnly": true,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "paridadeCompra",
+          "label": "Paridade de Compra",
+          "type": "decimal",
+          "required": false,
+          "description": "Valor retornado pelo BACEN.",
+          "readOnly": true,
+          "showInList": false,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "paridadeVenda",
+          "label": "Paridade de Venda",
+          "type": "decimal",
+          "required": false,
+          "description": "Valor retornado pelo BACEN.",
+          "readOnly": true,
+          "showInList": false,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "origem",
+          "label": "Origem",
+          "type": "select",
+          "required": true,
+          "description": "Fonte da cotação.",
+          "options": [
+            "BACEN PTAX",
+            "BRL fixo",
+            "Ajuste manual autorizado"
+          ],
+          "readOnly": true,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": true
+        },
+        {
+          "name": "consultadaEm",
+          "label": "Consultada Em",
+          "type": "datetime",
+          "required": true,
+          "description": "Momento da consulta.",
+          "readOnly": true,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "respostaNormalizada",
+          "label": "Resposta Normalizada",
+          "type": "json",
+          "required": false,
+          "description": "Dados necessários para auditoria, sem payload sensível.",
+          "readOnly": true,
+          "showInList": false,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "status",
+          "label": "Status",
+          "type": "status",
+          "required": true,
+          "description": "Resultado da consulta.",
+          "options": [
+            "Disponível",
+            "Indisponível",
+            "Substituída"
+          ],
+          "defaultValue": "Disponível",
+          "readOnly": true,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": true
+        }
+      ]
+    },
+    {
+      "name": "Evento de Webhook",
+      "key": "eventos_webhook",
+      "description": "Inbox persistida dos eventos Omie. Nenhum efeito externo ocorre antes da persistência e deduplicação.",
+      "source": "integration",
+      "primaryDisplayField": "eventId",
+      "fields": [
+        {
+          "name": "eventId",
+          "label": "ID do Evento",
+          "type": "text",
+          "required": true,
+          "description": "ID externo ou hash determinístico.",
+          "unique": true,
+          "readOnly": true,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": true
+        },
+        {
+          "name": "empresaOmieId",
+          "label": "Empresa Omie",
+          "type": "relation",
+          "required": true,
+          "description": "Empresa identificada pelo endpoint e appKey.",
+          "relation": {
+            "collection": "empresas_omie",
+            "displayField": "nome"
+          },
+          "readOnly": true,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": true
+        },
+        {
+          "name": "topic",
+          "label": "Tópico",
+          "type": "text",
+          "required": true,
+          "description": "Esperado: OrdemServico.EtapaAlterada.",
+          "readOnly": true,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": true
+        },
+        {
+          "name": "codigoOS",
+          "label": "Código da OS",
+          "type": "text",
+          "required": true,
+          "description": "nCodOS.",
+          "readOnly": true,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": true
+        },
+        {
+          "name": "numeroOS",
+          "label": "Número da OS",
+          "type": "text",
+          "required": false,
+          "description": "cNumOS quando disponível.",
+          "readOnly": true,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": true
+        },
+        {
+          "name": "etapa",
+          "label": "Etapa Recebida",
+          "type": "text",
+          "required": true,
+          "description": "Etapa informada pelo Omie.",
+          "readOnly": true,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": true
+        },
+        {
+          "name": "payloadSanitizado",
+          "label": "Payload Sanitizado",
+          "type": "json",
+          "required": true,
+          "description": "Payload sem credenciais ou dados desnecessários.",
+          "readOnly": true,
+          "showInList": false,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "payloadHash",
+          "label": "Hash do Payload",
+          "type": "text",
+          "required": true,
+          "description": "Usado na deduplicação.",
+          "readOnly": true,
+          "showInList": false,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "recebidoEm",
+          "label": "Recebido Em",
+          "type": "datetime",
+          "required": true,
+          "description": "Data de recebimento.",
+          "defaultValue": "now",
+          "readOnly": true,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": true
+        },
+        {
+          "name": "status",
+          "label": "Status",
+          "type": "status",
+          "required": true,
+          "description": "Estado da inbox.",
+          "options": [
+            "Recebido",
+            "Ignorado",
+            "Duplicado",
+            "Aceito",
+            "Processado",
+            "Falha de validação"
+          ],
+          "defaultValue": "Recebido",
+          "readOnly": true,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": true
+        },
+        {
+          "name": "motivo",
+          "label": "Motivo",
+          "type": "textarea",
+          "required": false,
+          "description": "Explica ignorado, duplicado ou falha.",
+          "readOnly": true,
+          "showInList": false,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "faturaId",
+          "label": "Fatura",
+          "type": "relation",
+          "required": false,
+          "description": "Fatura criada ou existente.",
+          "relation": {
+            "collection": "faturas",
+            "displayField": "numeroOS"
+          },
+          "readOnly": true,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "duplicadoDeId",
+          "label": "Duplicado De",
+          "type": "relation",
+          "required": false,
+          "description": "Evento original.",
+          "relation": {
+            "collection": "eventos_webhook",
+            "displayField": "eventId"
+          },
+          "readOnly": true,
+          "showInList": false,
+          "showInForm": true,
+          "showInFilters": false
+        }
+      ]
+    },
+    {
+      "name": "Fatura",
+      "key": "faturas",
+      "description": "Entidade operacional principal, com snapshot da OS, cotação, modelo, documento e status das integrações.",
+      "source": "integration",
+      "primaryDisplayField": "numeroOS",
+      "fields": [
+        {
+          "name": "chaveIdempotencia",
+          "label": "Chave de Idempotência",
+          "type": "text",
+          "required": true,
+          "description": "empresa:codigoOS:etapaOrigem:perfil:versaoModelo.",
+          "unique": true,
+          "readOnly": true,
+          "showInList": false,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "empresaOmieId",
+          "label": "Empresa Omie",
+          "type": "relation",
+          "required": true,
+          "description": "Empresa da Ordem de Serviço.",
+          "relation": {
+            "collection": "empresas_omie",
+            "displayField": "nome"
+          },
+          "readOnly": true,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": true
+        },
+        {
+          "name": "eventoWebhookId",
+          "label": "Evento de Origem",
+          "type": "relation",
+          "required": true,
+          "description": "Evento aceito que iniciou o processo.",
+          "relation": {
+            "collection": "eventos_webhook",
+            "displayField": "eventId"
+          },
+          "readOnly": true,
+          "showInList": false,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "codigoOS",
+          "label": "Código da OS",
+          "type": "text",
+          "required": true,
+          "description": "nCodOS.",
+          "readOnly": true,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": true
+        },
+        {
+          "name": "numeroOS",
+          "label": "Número da OS",
+          "type": "text",
+          "required": true,
+          "description": "cNumOS.",
+          "readOnly": true,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": true
+        },
+        {
+          "name": "etapaOrigem",
+          "label": "Etapa de Origem",
+          "type": "text",
+          "required": true,
+          "description": "Etapa que iniciou o processamento.",
+          "readOnly": true,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": true
+        },
+        {
+          "name": "codigoClienteOmie",
+          "label": "Código do Cliente",
+          "type": "text",
+          "required": true,
+          "description": "Código externo.",
+          "readOnly": true,
+          "showInList": false,
+          "showInForm": true,
+          "showInFilters": true
+        },
+        {
+          "name": "nomeCliente",
+          "label": "Cliente",
+          "type": "text",
+          "required": true,
+          "description": "Nome do cliente no snapshot.",
+          "readOnly": true,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": true
+        },
+        {
+          "name": "emailCliente",
+          "label": "E-mail do Cliente",
+          "type": "email",
+          "required": false,
+          "description": "E-mail principal consultado.",
+          "readOnly": true,
+          "showInList": false,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "paisCliente",
+          "label": "País",
+          "type": "text",
+          "required": false,
+          "description": "País consultado no Omie.",
+          "readOnly": true,
+          "showInList": false,
+          "showInForm": true,
+          "showInFilters": true
+        },
+        {
+          "name": "perfilFaturamentoId",
+          "label": "Perfil de Faturamento",
+          "type": "relation",
+          "required": true,
+          "description": "Perfil vigente utilizado.",
+          "relation": {
+            "collection": "perfis_faturamento",
+            "displayField": "nome"
+          },
+          "readOnly": true,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": true
+        },
+        {
+          "name": "modeloDocumentoId",
+          "label": "Modelo",
+          "type": "relation",
+          "required": true,
+          "description": "Modelo lógico.",
+          "relation": {
+            "collection": "modelos_documento",
+            "displayField": "nome"
+          },
+          "readOnly": true,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": true
+        },
+        {
+          "name": "versaoModeloId",
+          "label": "Versão do Modelo",
+          "type": "relation",
+          "required": true,
+          "description": "Versão imutável usada.",
+          "relation": {
+            "collection": "versoes_modelo_documento",
+            "displayField": "versao"
+          },
+          "readOnly": true,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": true
+        },
+        {
+          "name": "idioma",
+          "label": "Idioma",
+          "type": "select",
+          "required": true,
+          "description": "Idioma efetivo.",
+          "options": [
+            "pt-BR",
+            "en-US",
+            "es-ES"
+          ],
+          "readOnly": true,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": true
+        },
+        {
+          "name": "moeda",
+          "label": "Moeda",
+          "type": "select",
+          "required": true,
+          "description": "Moeda efetiva.",
+          "options": [
+            "BRL",
+            "USD",
+            "EUR"
+          ],
+          "readOnly": true,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": true
+        },
+        {
+          "name": "dataReferenciaCotacao",
+          "label": "Data de Referência",
+          "type": "date",
+          "required": true,
+          "description": "Data solicitada.",
+          "readOnly": true,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": true
+        },
+        {
+          "name": "cotacaoMoedaId",
+          "label": "Cotação",
+          "type": "relation",
+          "required": true,
+          "description": "Cotação oficial persistida.",
+          "relation": {
+            "collection": "cotacoes_moeda",
+            "displayField": "chaveCotacao"
+          },
+          "readOnly": true,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "cotacaoOficial",
+          "label": "Cotação Oficial",
+          "type": "decimal",
+          "required": true,
+          "description": "Valor BACEN ou 1 para BRL.",
+          "readOnly": true,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "tipoAjusteCotacao",
+          "label": "Tipo de Ajuste",
+          "type": "select",
+          "required": true,
+          "description": "Ajuste aplicado.",
+          "options": [
+            "Nenhum",
+            "Percentual",
+            "Valor fixo"
+          ],
+          "readOnly": true,
+          "showInList": false,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "valorAjusteCotacao",
+          "label": "Valor do Ajuste",
+          "type": "decimal",
+          "required": true,
+          "description": "Snapshot do ajuste.",
+          "readOnly": true,
+          "showInList": false,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "cotacaoEfetiva",
+          "label": "Cotação Efetiva",
+          "type": "decimal",
+          "required": true,
+          "description": "Valor final usado no documento.",
+          "readOnly": true,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "dadosOsSnapshot",
+          "label": "Snapshot da OS",
+          "type": "json",
+          "required": true,
+          "description": "Dados necessários da OS, cliente, país e configurações, sem segredos.",
+          "readOnly": true,
+          "showInList": false,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "pdfFile",
+          "label": "PDF da Fatura",
+          "type": "file",
+          "required": false,
+          "description": "Arquivo gerado e preservado.",
+          "readOnly": true,
+          "showInList": false,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "pdfHash",
+          "label": "Hash do PDF",
+          "type": "text",
+          "required": false,
+          "description": "Hash para idempotência do anexo.",
+          "readOnly": true,
+          "showInList": false,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "nomeArquivo",
+          "label": "Nome do Arquivo",
+          "type": "text",
+          "required": false,
+          "description": "Nome final do PDF.",
+          "readOnly": true,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "anexoOmieId",
+          "label": "ID do Anexo no Omie",
+          "type": "text",
+          "required": false,
+          "description": "Identificador retornado pelo Omie.",
+          "readOnly": true,
+          "showInList": false,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "destinatarios",
+          "label": "Destinatários",
+          "type": "email_list",
+          "required": false,
+          "description": "Lista final sanitizada.",
+          "readOnly": true,
+          "showInList": false,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "copias",
+          "label": "Cópias",
+          "type": "email_list",
+          "required": false,
+          "description": "Cópias finais.",
+          "readOnly": true,
+          "showInList": false,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "providerMessageId",
+          "label": "ID da Mensagem",
+          "type": "text",
+          "required": false,
+          "description": "Identificador do provedor de e-mail.",
+          "readOnly": true,
+          "showInList": false,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "adiantamentoSolicitado",
+          "label": "Adiantamento Solicitado",
+          "type": "boolean",
+          "required": true,
+          "description": "Regra efetiva.",
+          "readOnly": true,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": true
+        },
+        {
+          "name": "adiantamentoConfirmado",
+          "label": "Adiantamento Confirmado",
+          "type": "boolean",
+          "required": true,
+          "description": "Confirmação de efeito no Omie.",
+          "defaultValue": false,
+          "readOnly": true,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": true
+        },
+        {
+          "name": "etapaAtual",
+          "label": "Etapa Atual",
+          "type": "status",
+          "required": true,
+          "description": "Etapa interna da esteira.",
+          "options": [
+            "Recebida",
+            "Validando evento",
+            "Carregando OS e cliente",
+            "Identificando perfil",
+            "Obtendo cotação",
+            "Gerando documento",
+            "Anexando ao Omie",
+            "Enviando e-mail",
+            "Gerando adiantamento",
+            "Atualizando etapa da OS",
+            "Concluída",
+            "Aguardando retry",
+            "Falha operacional",
+            "Cancelada"
+          ],
+          "defaultValue": "Recebida",
+          "readOnly": true,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": true
+        },
+        {
+          "name": "status",
+          "label": "Status",
+          "type": "status",
+          "required": true,
+          "description": "Resultado geral.",
+          "options": [
+            "Pendente",
+            "Em processamento",
+            "Concluída",
+            "Aguardando retry",
+            "Falha",
+            "Cancelada",
+            "Ignorada"
+          ],
+          "defaultValue": "Pendente",
+          "readOnly": true,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": true
+        },
+        {
+          "name": "tentativas",
+          "label": "Tentativas",
+          "type": "number",
+          "required": true,
+          "description": "Tentativas gerais.",
+          "defaultValue": 0,
+          "readOnly": true,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "ultimoErroCodigo",
+          "label": "Código do Último Erro",
+          "type": "text",
+          "required": false,
+          "description": "Código normalizado.",
+          "readOnly": true,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": true
+        },
+        {
+          "name": "ultimoErroMensagem",
+          "label": "Último Erro",
+          "type": "textarea",
+          "required": false,
+          "description": "Mensagem operacional sem segredo.",
+          "readOnly": true,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "acaoRecomendada",
+          "label": "Ação Recomendada",
+          "type": "textarea",
+          "required": false,
+          "description": "Orientação para a operação.",
+          "readOnly": true,
+          "showInList": false,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "iniciadaEm",
+          "label": "Iniciada Em",
+          "type": "datetime",
+          "required": false,
+          "description": "Início efetivo.",
+          "readOnly": true,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": true
+        },
+        {
+          "name": "concluidaEm",
+          "label": "Concluída Em",
+          "type": "datetime",
+          "required": false,
+          "description": "Conclusão integral.",
+          "readOnly": true,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": true
+        },
+        {
+          "name": "tempoProcessamentoMs",
+          "label": "Tempo de Processamento",
+          "type": "number",
+          "required": false,
+          "description": "Duração total em milissegundos.",
+          "readOnly": true,
+          "showInList": false,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "motivoCancelamento",
+          "label": "Motivo do Cancelamento",
+          "type": "textarea",
+          "required": false,
+          "description": "Justificativa obrigatória em cancelamento.",
+          "readOnly": true,
+          "showInList": false,
+          "showInForm": true,
+          "showInFilters": false
+        }
+      ],
+      "indexes": [
+        {
+          "fields": [
+            "chaveIdempotencia"
+          ],
+          "unique": true
+        },
+        {
+          "fields": [
+            "empresaOmieId",
+            "codigoOS"
+          ]
+        },
+        {
+          "fields": [
+            "status",
+            "etapaAtual",
+            "createdAt"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "Execução de Integração",
+      "key": "execucoes_integracao",
+      "description": "Registro de cada efeito ou consulta externa, permitindo retry seletivo e auditoria.",
+      "source": "integration",
+      "primaryDisplayField": "tipo",
+      "fields": [
+        {
+          "name": "faturaId",
+          "label": "Fatura",
+          "type": "relation",
+          "required": true,
+          "description": "Fatura relacionada.",
+          "relation": {
+            "collection": "faturas",
+            "displayField": "numeroOS"
+          },
+          "readOnly": true,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": true
+        },
+        {
+          "name": "empresaOmieId",
+          "label": "Empresa Omie",
+          "type": "relation",
+          "required": true,
+          "description": "Empresa relacionada.",
+          "relation": {
+            "collection": "empresas_omie",
+            "displayField": "nome"
+          },
+          "readOnly": true,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": true
+        },
+        {
+          "name": "tipo",
+          "label": "Tipo",
+          "type": "select",
+          "required": true,
+          "description": "Operação executada.",
+          "options": [
+            "Consultar OS",
+            "Consultar cliente",
+            "Consultar país",
+            "Obter cotação",
+            "Gerar PDF",
+            "Anexar documento",
+            "Listar anexos",
+            "Obter anexo",
+            "Enviar e-mail",
+            "Gerar adiantamento",
+            "Alterar etapa da OS"
+          ],
+          "readOnly": true,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": true
+        },
+        {
+          "name": "sistema",
+          "label": "Sistema",
+          "type": "select",
+          "required": true,
+          "description": "Origem ou destino.",
+          "options": [
+            "Omie",
+            "BACEN",
+            "SendGrid",
+            "Renderizador interno"
+          ],
+          "readOnly": true,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": true
+        },
+        {
+          "name": "direcao",
+          "label": "Direção",
+          "type": "select",
+          "required": true,
+          "description": "Direção da integração.",
+          "options": [
+            "inbound",
+            "outbound",
+            "internal"
+          ],
+          "readOnly": true,
+          "showInList": false,
+          "showInForm": true,
+          "showInFilters": true
+        },
+        {
+          "name": "chaveIdempotencia",
+          "label": "Chave de Idempotência",
+          "type": "text",
+          "required": true,
+          "description": "Chave específica do efeito.",
+          "unique": true,
+          "readOnly": true,
+          "showInList": false,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "status",
+          "label": "Status",
+          "type": "status",
+          "required": true,
+          "description": "Estado operacional.",
+          "options": [
+            "Pendente",
+            "Em processamento",
+            "Concluída",
+            "Falha transitória",
+            "Aguardando retry",
+            "Falha definitiva",
+            "Cancelada"
+          ],
+          "defaultValue": "Pendente",
+          "readOnly": true,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": true
+        },
+        {
+          "name": "tentativaAtual",
+          "label": "Tentativa",
+          "type": "number",
+          "required": true,
+          "description": "Número da tentativa.",
+          "defaultValue": 0,
+          "readOnly": true,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "maxTentativas",
+          "label": "Máximo de Tentativas",
+          "type": "number",
+          "required": true,
+          "description": "Limite configurado.",
+          "defaultValue": 5,
+          "readOnly": true,
+          "showInList": false,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "proximaTentativaEm",
+          "label": "Próxima Tentativa",
+          "type": "datetime",
+          "required": false,
+          "description": "Agendamento do retry.",
+          "readOnly": true,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": true
+        },
+        {
+          "name": "requestResumo",
+          "label": "Requisição Resumida",
+          "type": "json",
+          "required": false,
+          "description": "Resumo sanitizado, nunca credenciais ou arquivo completo.",
+          "readOnly": true,
+          "showInList": false,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "responseResumo",
+          "label": "Resposta Resumida",
+          "type": "json",
+          "required": false,
+          "description": "Resposta normalizada.",
+          "readOnly": true,
+          "showInList": false,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "erroCodigo",
+          "label": "Código do Erro",
+          "type": "text",
+          "required": false,
+          "description": "Código normalizado.",
+          "readOnly": true,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": true
+        },
+        {
+          "name": "erroMensagem",
+          "label": "Mensagem de Erro",
+          "type": "textarea",
+          "required": false,
+          "description": "Mensagem operacional.",
+          "readOnly": true,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "erroDetalhesTecnicosRef",
+          "label": "Referência Técnica",
+          "type": "text",
+          "required": false,
+          "description": "Correlation ID para observabilidade.",
+          "readOnly": true,
+          "showInList": false,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "iniciadaEm",
+          "label": "Iniciada Em",
+          "type": "datetime",
+          "required": false,
+          "description": "Início.",
+          "readOnly": true,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "finalizadaEm",
+          "label": "Finalizada Em",
+          "type": "datetime",
+          "required": false,
+          "description": "Fim.",
+          "readOnly": true,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "duracaoMs",
+          "label": "Duração",
+          "type": "number",
+          "required": false,
+          "description": "Duração em milissegundos.",
+          "readOnly": true,
+          "showInList": false,
+          "showInForm": true,
+          "showInFilters": false
+        },
+        {
+          "name": "executadaPor",
+          "label": "Executada Por",
+          "type": "text",
+          "required": true,
+          "description": "Processo ou usuário.",
+          "readOnly": true,
+          "showInList": true,
+          "showInForm": true,
+          "showInFilters": true
+        }
+      ],
+      "indexes": [
+        {
+          "fields": [
+            "chaveIdempotencia"
+          ],
+          "unique": true
+        },
+        {
+          "fields": [
+            "faturaId",
+            "tipo"
+          ]
+        },
+        {
+          "fields": [
+            "status",
+            "proximaTentativaEm"
+          ]
+        }
+      ]
+    }
+  ],
+  "pipelines": [
+    {
+      "name": "Processamento de Fatura",
+      "key": "processamento_fatura",
+      "collection": "faturas",
+      "description": "Esteira técnica e operacional disparada por evento validado do Omie.",
+      "create": {
+        "enabled": false,
+        "reason": "Faturas são criadas por evento aceito ou ação administrativa controlada."
+      },
+      "stages": [
+        {
+          "key": "recebida",
+          "label": "Recebida",
+          "description": "Fatura registrada e aguardando processamento.",
+          "responsibleProfiles": [
+            "processo_sistema"
+          ],
+          "allowedActions": [
+            "iniciar",
+            "cancelar"
+          ]
+        },
+        {
+          "key": "validando_evento",
+          "label": "Validando evento",
+          "description": "Valida tópico, empresa, etapa, assinatura e duplicidade.",
+          "responsibleProfiles": [
+            "processo_sistema"
+          ],
+          "allowedActions": [
+            "aceitar",
+            "ignorar",
+            "falhar"
+          ]
+        },
+        {
+          "key": "carregando_os_cliente",
+          "label": "Carregando OS e cliente",
+          "description": "Consulta OS, cliente e país no Omie.",
+          "responsibleProfiles": [
+            "processo_sistema"
+          ],
+          "allowedActions": [
+            "avancar",
+            "agendar_retry",
+            "falhar"
+          ]
+        },
+        {
+          "key": "identificando_perfil",
+          "label": "Identificando perfil",
+          "description": "Resolve perfil vigente por empresa e cliente.",
+          "responsibleProfiles": [
+            "processo_sistema",
+            "operacao_faturamento"
+          ],
+          "allowedActions": [
+            "avancar",
+            "corrigir_perfil",
+            "agendar_retry",
+            "falhar"
+          ]
+        },
+        {
+          "key": "obtendo_cotacao",
+          "label": "Obtendo cotação",
+          "description": "Consulta ou reutiliza snapshot BACEN pela data de referência.",
+          "responsibleProfiles": [
+            "processo_sistema",
+            "operacao_faturamento"
+          ],
+          "allowedActions": [
+            "avancar",
+            "autorizar_cotacao_manual",
+            "agendar_retry",
+            "falhar"
+          ]
+        },
+        {
+          "key": "gerando_documento",
+          "label": "Gerando documento",
+          "description": "Renderiza e valida o PDF com versão publicada.",
+          "responsibleProfiles": [
+            "processo_sistema"
+          ],
+          "allowedActions": [
+            "avancar",
+            "agendar_retry",
+            "falhar"
+          ]
+        },
+        {
+          "key": "anexando_omie",
+          "label": "Anexando ao Omie",
+          "description": "Inclui o PDF uma única vez na OS.",
+          "responsibleProfiles": [
+            "processo_sistema"
+          ],
+          "allowedActions": [
+            "avancar",
+            "reprocessar_etapa",
+            "agendar_retry",
+            "falhar"
+          ]
+        },
+        {
+          "key": "enviando_email",
+          "label": "Enviando e-mail",
+          "description": "Monta destinatários e anexos permitidos e envia pelo provedor.",
+          "responsibleProfiles": [
+            "processo_sistema",
+            "operacao_faturamento"
+          ],
+          "allowedActions": [
+            "avancar",
+            "reenviar_email",
+            "agendar_retry",
+            "falhar"
+          ]
+        },
+        {
+          "key": "gerando_adiantamento",
+          "label": "Gerando adiantamento",
+          "description": "Consulta o estado atual e aplica adiantamento somente quando necessário.",
+          "responsibleProfiles": [
+            "processo_sistema",
+            "gestor_faturamento"
+          ],
+          "allowedActions": [
+            "avancar",
+            "confirmar_sem_adiantamento",
+            "reprocessar_etapa",
+            "agendar_retry",
+            "falhar"
+          ]
+        },
+        {
+          "key": "atualizando_etapa_omie",
+          "label": "Atualizando etapa da OS",
+          "description": "Move a OS para a etapa de sucesso e registra observação.",
+          "responsibleProfiles": [
+            "processo_sistema"
+          ],
+          "allowedActions": [
+            "concluir",
+            "reprocessar_etapa",
+            "agendar_retry",
+            "falhar"
+          ]
+        },
+        {
+          "key": "aguardando_retry",
+          "label": "Aguardando retry",
+          "description": "Erro transitório com próxima tentativa agendada.",
+          "responsibleProfiles": [
+            "processo_sistema",
+            "operacao_faturamento"
+          ],
+          "allowedActions": [
+            "executar_agora",
+            "cancelar",
+            "marcar_falha_definitiva"
+          ]
+        },
+        {
+          "key": "falha_operacional",
+          "label": "Falha operacional",
+          "description": "Exige correção de dados, configuração ou autorização.",
+          "responsibleProfiles": [
+            "operacao_faturamento",
+            "gestor_faturamento"
+          ],
+          "allowedActions": [
+            "corrigir_e_reprocessar",
+            "reprocessar_etapa",
+            "cancelar",
+            "mover_os_para_erro"
+          ]
+        },
+        {
+          "key": "concluida",
+          "label": "Concluída",
+          "description": "Todos os efeitos obrigatórios foram confirmados.",
+          "responsibleProfiles": [
+            "operacao_faturamento",
+            "gestor_faturamento",
+            "auditoria_consulta"
+          ],
+          "allowedActions": [
+            "visualizar",
+            "baixar_pdf",
+            "reenviar_email_controlado"
+          ]
+        },
+        {
+          "key": "cancelada",
+          "label": "Cancelada",
+          "description": "Processo encerrado com justificativa.",
+          "responsibleProfiles": [
+            "gestor_faturamento",
+            "auditoria_consulta"
+          ],
+          "allowedActions": [
+            "visualizar",
+            "reabrir_com_justificativa"
+          ]
+        }
+      ],
+      "transitionRules": [
+        "Não avançar sem concluir ou dispensar formalmente a etapa atual.",
+        "Retry deve repetir somente a execução pendente ou com falha.",
+        "Etapas concluídas com chave de idempotência válida não podem produzir novo efeito.",
+        "A conclusão exige documento gerado, anexo confirmado, e-mail confirmado quando obrigatório, adiantamento confirmado ou dispensado e etapa Omie atualizada."
+      ]
+    },
+    {
+      "name": "Publicação de Modelo",
+      "key": "publicacao_modelo",
+      "collection": "versoes_modelo_documento",
+      "description": "Controla rascunho, homologação e publicação imutável dos modelos.",
+      "create": {
+        "enabled": true
+      },
+      "stages": [
+        {
+          "key": "rascunho",
+          "label": "Rascunho",
+          "description": "Versão editável.",
+          "responsibleProfiles": [
+            "administrador"
+          ],
+          "allowedActions": [
+            "editar",
+            "gerar_preview",
+            "enviar_para_homologacao",
+            "arquivar"
+          ]
+        },
+        {
+          "key": "em_homologacao",
+          "label": "Em homologação",
+          "description": "Versão bloqueada para comparação com casos reais.",
+          "responsibleProfiles": [
+            "administrador",
+            "gestor_faturamento"
+          ],
+          "allowedActions": [
+            "aprovar",
+            "reprovar",
+            "gerar_preview"
+          ]
+        },
+        {
+          "key": "publicado",
+          "label": "Publicado",
+          "description": "Versão imutável disponível para novos processamentos.",
+          "responsibleProfiles": [
+            "gestor_faturamento"
+          ],
+          "allowedActions": [
+            "visualizar",
+            "criar_nova_versao",
+            "substituir"
+          ]
+        },
+        {
+          "key": "substituido",
+          "label": "Substituído",
+          "description": "Permanece disponível para auditoria de faturas antigas.",
+          "responsibleProfiles": [
+            "administrador",
+            "auditoria_consulta"
+          ],
+          "allowedActions": [
+            "visualizar"
+          ]
+        },
+        {
+          "key": "arquivado",
+          "label": "Arquivado",
+          "description": "Versão não utilizada.",
+          "responsibleProfiles": [
+            "administrador",
+            "auditoria_consulta"
+          ],
+          "allowedActions": [
+            "visualizar",
+            "restaurar_como_rascunho"
+          ]
+        }
+      ]
+    }
+  ],
+  "pages": [
+    {
+      "path": "/",
+      "label": "Visão Geral",
+      "description": "Indicadores de processamento e alertas.",
+      "type": "dashboard",
+      "dashboard": "operacao_faturas",
+      "visibleTo": [
+        "administrador",
+        "operacao_faturamento",
+        "gestor_faturamento",
+        "auditoria_consulta"
+      ]
+    },
+    {
+      "path": "/faturas",
+      "label": "Faturas",
+      "description": "Lista e esteira operacional.",
+      "type": "collection_pipeline",
+      "collection": "faturas",
+      "pipeline": "processamento_fatura",
+      "visibleTo": [
+        "administrador",
+        "operacao_faturamento",
+        "gestor_faturamento",
+        "auditoria_consulta"
+      ]
+    },
+    {
+      "path": "/faturas/:id",
+      "label": "Detalhe da Fatura",
+      "description": "Abas Resumo, OS/Cliente, Documento, Cotação, E-mail, Adiantamento, Integrações e Auditoria.",
+      "type": "detail_modal_or_page",
+      "collection": "faturas",
+      "visibleTo": [
+        "administrador",
+        "operacao_faturamento",
+        "gestor_faturamento",
+        "auditoria_consulta"
+      ]
+    },
+    {
+      "path": "/integracoes",
+      "label": "Execuções de Integração",
+      "description": "Acompanhamento técnico-operacional e retries.",
+      "type": "collection",
+      "collection": "execucoes_integracao",
+      "visibleTo": [
+        "administrador",
+        "operacao_faturamento",
+        "gestor_faturamento",
+        "auditoria_consulta"
+      ]
+    },
+    {
+      "path": "/eventos",
+      "label": "Eventos Omie",
+      "description": "Inbox de webhooks, duplicados e ignorados.",
+      "type": "collection",
+      "collection": "eventos_webhook",
+      "visibleTo": [
+        "administrador",
+        "gestor_faturamento",
+        "auditoria_consulta"
+      ]
+    },
+    {
+      "path": "/modelos",
+      "label": "Modelos de Documento",
+      "description": "Modelos e versões.",
+      "type": "collection_with_related_grid",
+      "collection": "modelos_documento",
+      "relatedCollection": "versoes_modelo_documento",
+      "pipeline": "publicacao_modelo",
+      "visibleTo": [
+        "administrador",
+        "gestor_faturamento",
+        "auditoria_consulta"
+      ]
+    },
+    {
+      "path": "/perfis-faturamento",
+      "label": "Perfis de Faturamento",
+      "description": "Regras por empresa e cliente.",
+      "type": "collection",
+      "collection": "perfis_faturamento",
+      "visibleTo": [
+        "administrador",
+        "operacao_faturamento",
+        "gestor_faturamento",
+        "auditoria_consulta"
+      ]
+    },
+    {
+      "path": "/cotacoes",
+      "label": "Cotações",
+      "description": "Snapshots BACEN usados nas faturas.",
+      "type": "collection",
+      "collection": "cotacoes_moeda",
+      "visibleTo": [
+        "administrador",
+        "operacao_faturamento",
+        "gestor_faturamento",
+        "auditoria_consulta"
+      ]
+    },
+    {
+      "path": "/configuracoes/empresas",
+      "label": "Empresas Omie",
+      "description": "Sete empresas, etapas e referências seguras.",
+      "type": "collection",
+      "collection": "empresas_omie",
+      "visibleTo": [
+        "administrador",
+        "auditoria_consulta"
+      ]
+    }
+  ],
+  "rules": [
+    {
+      "key": "webhook_persist_before_process",
+      "name": "Persistir antes de processar",
+      "description": "O endpoint valida autenticação mínima, persiste o evento e responde; nenhuma integração longa ocorre na requisição do webhook.",
+      "appliesTo": [
+        "eventos_webhook"
+      ],
+      "trigger": "webhook_received",
+      "condition": "topic == OrdemServico.EtapaAlterada",
+      "expectedBehavior": "Criar ou localizar evento por eventId/hash e gerar ticket durável para processamento.",
+      "priority": "critical"
+    },
+    {
+      "key": "fatura_idempotente",
+      "name": "Fatura idempotente",
+      "description": "A mesma combinação funcional gera no máximo uma fatura.",
+      "appliesTo": [
+        "faturas"
+      ],
+      "trigger": "event_accepted",
+      "condition": "empresaOmieId + codigoOS + etapaOrigem + perfilFaturamentoId + versaoModeloId",
+      "expectedBehavior": "Criar uma única fatura ou vincular ao registro existente.",
+      "priority": "critical"
+    },
+    {
+      "key": "efeitos_idempotentes",
+      "name": "Efeitos externos idempotentes",
+      "description": "Documento, anexo, e-mail, adiantamento e alteração de etapa possuem chaves próprias.",
+      "appliesTo": [
+        "execucoes_integracao"
+      ],
+      "trigger": "before_external_effect",
+      "condition": "chaveIdempotencia não concluída",
+      "expectedBehavior": "Executar uma vez; retries consultam o estado antes de repetir.",
+      "priority": "critical"
+    },
+    {
+      "key": "somente_os",
+      "name": "Escopo somente Ordem de Serviço",
+      "description": "Ignorar outros tópicos no MVP.",
+      "appliesTo": [
+        "eventos_webhook"
+      ],
+      "trigger": "webhook_received",
+      "condition": "topic != OrdemServico.EtapaAlterada",
+      "expectedBehavior": "Persistir como Ignorado sem gerar fatura.",
+      "priority": "high"
+    },
+    {
+      "key": "resolver_perfil",
+      "name": "Resolver perfil vigente",
+      "description": "Selecionar perfil ativo por empresa, cliente e vigência.",
+      "appliesTo": [
+        "faturas",
+        "perfis_faturamento"
+      ],
+      "trigger": "after_load_os",
+      "condition": "existe exatamente um perfil ativo e vigente",
+      "expectedBehavior": "Congelar o perfil na fatura; zero ou múltiplos perfis geram falha operacional.",
+      "priority": "critical"
+    },
+    {
+      "key": "cotacao_brl",
+      "name": "BRL igual a 1",
+      "description": "Faturas em BRL não consultam BACEN.",
+      "appliesTo": [
+        "cotacoes_moeda",
+        "faturas"
+      ],
+      "trigger": "before_quote",
+      "condition": "moeda == BRL",
+      "expectedBehavior": "Persistir snapshot com cotação oficial e efetiva 1.",
+      "priority": "high"
+    },
+    {
+      "key": "cotacao_ptax",
+      "name": "PTAX de fechamento",
+      "description": "USD e EUR usam Fechamento PTAX na data de referência ou último dia útil publicado anterior.",
+      "appliesTo": [
+        "cotacoes_moeda",
+        "faturas"
+      ],
+      "trigger": "before_document",
+      "condition": "moeda in [USD, EUR]",
+      "expectedBehavior": "Consultar cache; buscar até encontrar data efetiva anterior; persistir resposta normalizada e valor usado.",
+      "priority": "critical"
+    },
+    {
+      "key": "cotacao_immutavel",
+      "name": "Cotação imutável por fatura",
+      "description": "Reprocessamento não recalcula automaticamente uma fatura que já possui cotação válida.",
+      "appliesTo": [
+        "faturas"
+      ],
+      "trigger": "retry_or_reprocess",
+      "condition": "cotacaoMoedaId preenchida",
+      "expectedBehavior": "Reutilizar o snapshot; alteração manual exige permissão e nova versão ou reabertura controlada.",
+      "priority": "critical"
+    },
+    {
+      "key": "modelo_publicado",
+      "name": "Somente modelo publicado",
+      "description": "Geração automática usa versão publicada e imutável.",
+      "appliesTo": [
+        "faturas",
+        "versoes_modelo_documento"
+      ],
+      "trigger": "before_document",
+      "condition": "status da versão == Publicado",
+      "expectedBehavior": "Gerar PDF e registrar hash; caso contrário, falha operacional.",
+      "priority": "critical"
+    },
+    {
+      "key": "anexos_allowlist",
+      "name": "Anexos por allowlist",
+      "description": "Nunca enviar todos os anexos da OS de forma irrestrita.",
+      "appliesTo": [
+        "faturas",
+        "perfis_faturamento"
+      ],
+      "trigger": "before_email",
+      "condition": "politicaAnexos != Somente fatura",
+      "expectedBehavior": "Aplicar tipo, padrão de nome, tamanho e exclusões; registrar anexos selecionados.",
+      "priority": "critical"
+    },
+    {
+      "key": "email_sanitizado",
+      "name": "Destinatários sanitizados",
+      "description": "Combinar cliente, OS, perfil e cópias, removendo vazios e duplicados.",
+      "appliesTo": [
+        "faturas"
+      ],
+      "trigger": "before_email",
+      "condition": "envio obrigatório",
+      "expectedBehavior": "Exigir pelo menos um destinatário válido e persistir lista final.",
+      "priority": "high"
+    },
+    {
+      "key": "adiantamento_safe",
+      "name": "Adiantamento seguro",
+      "description": "Consultar estado atual antes de marcar parcelas.",
+      "appliesTo": [
+        "faturas",
+        "execucoes_integracao"
+      ],
+      "trigger": "before_advance",
+      "condition": "adiantamentoSolicitado == true",
+      "expectedBehavior": "Não repetir quando já confirmado; usar categoria e conta da empresa ou perfil e validar parcelas.",
+      "priority": "critical"
+    },
+    {
+      "key": "success_only_after_all",
+      "name": "Sucesso somente após efeitos obrigatórios",
+      "description": "A OS só vai para etapa de sucesso após confirmações.",
+      "appliesTo": [
+        "faturas"
+      ],
+      "trigger": "before_complete",
+      "condition": "documento + anexo + email obrigatório + adiantamento ou dispensa + etapa Omie",
+      "expectedBehavior": "Concluir e congelar duração; caso contrário permanecer em processamento ou falha.",
+      "priority": "critical"
+    },
+    {
+      "key": "retry_selective",
+      "name": "Retry seletivo",
+      "description": "Retry não repete etapas concluídas.",
+      "appliesTo": [
+        "execucoes_integracao",
+        "faturas"
+      ],
+      "trigger": "retry",
+      "condition": "execução com falha transitória ou aguardando retry",
+      "expectedBehavior": "Retomar somente a operação pendente, com backoff e limite.",
+      "priority": "critical"
+    },
+    {
+      "key": "company_isolation",
+      "name": "Isolamento por empresa",
+      "description": "Toda entidade operacional exige empresaOmieId e toda chamada externa usa a credencial correspondente.",
+      "appliesTo": [
+        "perfis_faturamento",
+        "eventos_webhook",
+        "faturas",
+        "execucoes_integracao"
+      ],
+      "trigger": "all_operations",
+      "condition": "empresaOmieId presente e usuário autorizado",
+      "expectedBehavior": "Impedir leitura, atualização ou integração cruzada entre bases não autorizadas.",
+      "priority": "critical"
+    },
+    {
+      "key": "secrets_and_logs",
+      "name": "Segredos e logs protegidos",
+      "description": "Credenciais não ficam em payload funcional, frontend, auditoria ou logs.",
+      "appliesTo": [
+        "empresas_omie",
+        "integrations",
+        "audit"
+      ],
+      "trigger": "all_operations",
+      "condition": "dados contendo segredo, token, appKey completa, appSecret ou arquivo base64",
+      "expectedBehavior": "Usar secretRef e aplicar redaction antes de persistir ou logar.",
+      "priority": "critical"
+    }
+  ],
+  "permissions": [
+    {
+      "profile": "administrador",
+      "can": [
+        "view",
+        "create",
+        "edit",
+        "delete",
+        "configure",
+        "publish",
+        "rotate_secret",
+        "test_connection",
+        "reprocess",
+        "cancel",
+        "export",
+        "audit"
+      ],
+      "resources": [
+        "*"
+      ]
+    },
+    {
+      "profile": "operacao_faturamento",
+      "can": [
+        "view",
+        "edit_operational_fields",
+        "preview",
+        "download",
+        "reprocess",
+        "retry_now",
+        "resend_email",
+        "attach",
+        "comment"
+      ],
+      "resources": [
+        "faturas",
+        "execucoes_integracao",
+        "perfis_faturamento",
+        "cotacoes_moeda"
+      ]
+    },
+    {
+      "profile": "gestor_faturamento",
+      "can": [
+        "view",
+        "approve",
+        "reject",
+        "publish",
+        "authorize_manual_quote",
+        "authorize_critical_reprocess",
+        "cancel",
+        "reopen",
+        "resend_email",
+        "export",
+        "audit"
+      ],
+      "resources": [
+        "faturas",
+        "modelos_documento",
+        "versoes_modelo_documento",
+        "perfis_faturamento",
+        "execucoes_integracao",
+        "dashboards"
+      ]
+    },
+    {
+      "profile": "auditoria_consulta",
+      "can": [
+        "view",
+        "download",
+        "export",
+        "audit"
+      ],
+      "resources": [
+        "empresas_omie",
+        "perfis_faturamento",
+        "modelos_documento",
+        "versoes_modelo_documento",
+        "cotacoes_moeda",
+        "eventos_webhook",
+        "faturas",
+        "execucoes_integracao",
+        "dashboards"
+      ]
+    },
+    {
+      "profile": "processo_sistema",
+      "can": [
+        "receive_webhook",
+        "create_ticket",
+        "read_secrets",
+        "execute_integrations",
+        "transition_pipeline",
+        "write_tracking"
+      ],
+      "resources": [
+        "eventos_webhook",
+        "faturas",
+        "execucoes_integracao",
+        "cotacoes_moeda",
+        "integrations"
+      ]
+    }
+  ],
+  "integrations": [
+    {
+      "name": "Omie - Webhook de Ordem de Serviço",
+      "key": "omie_webhook_ordem_servico",
+      "type": "webhook",
+      "direction": "inbound",
+      "description": "Recebe OrdemServico.EtapaAlterada para uma das sete bases.",
+      "dataObjects": [
+        "Evento de Webhook",
+        "Fatura"
+      ],
+      "auth": "Token ou assinatura por empresa em secretRef e validação de appKey sem expor credencial.",
+      "frequency": "event-driven",
+      "endpointPattern": "/api/integrations/omie/webhooks/ordem-servico/:empresaCode",
+      "errorHandling": "Responder após persistir; duplicados retornam sucesso idempotente; payload inválido não inicia processo.",
+      "security": [
+        "rate_limit",
+        "payload_size_limit",
+        "redaction",
+        "correlation_id",
+        "no_secret_in_url"
+      ]
+    },
+    {
+      "name": "Omie - API de Ordem de Serviço e Cadastros",
+      "key": "omie_api",
+      "type": "rest_api",
+      "direction": "bidirectional",
+      "description": "Consulta OS, cliente, país e anexos; inclui anexo; altera OS e parcelas.",
+      "dataObjects": [
+        "Empresa Omie",
+        "Fatura",
+        "Execução de Integração"
+      ],
+      "auth": "appKey e appSecret obtidos por secretRef no backend.",
+      "frequency": "por ticket de integração",
+      "resources": [
+        "servicos/os",
+        "geral/clientes",
+        "geral/paises",
+        "geral/anexo",
+        "geral/contacorrente"
+      ],
+      "clientRequirements": [
+        "baseURL centralizada",
+        "timeout",
+        "retry técnico",
+        "normalização de erros",
+        "redaction",
+        "correlation id"
+      ],
+      "errorHandling": "Classificar erro transitório, de negócio ou definitivo; não engolir falha de troca de etapa ou anexo."
+    },
+    {
+      "name": "BACEN - PTAX",
+      "key": "bacen_ptax",
+      "type": "odata_api",
+      "direction": "inbound",
+      "description": "Obtém cotação oficial de USD e EUR.",
+      "dataObjects": [
+        "Cotação de Moeda",
+        "Fatura",
+        "Execução de Integração"
+      ],
+      "auth": "Pública",
+      "frequency": "sob demanda com cache por moeda, data e boletim",
+      "resource": "CotacaoMoedaDia",
+      "selection": "tipoBoletim == Fechamento PTAX",
+      "fallback": "Retroceder por data até o último dia útil publicado, com limite configurável.",
+      "errorHandling": "Retry para indisponibilidade; falha operacional quando não houver cotação no limite."
+    },
+    {
+      "name": "SendGrid - E-mail Transacional",
+      "key": "sendgrid_email",
+      "type": "email_provider",
+      "direction": "outbound",
+      "description": "Envia fatura e anexos permitidos.",
+      "dataObjects": [
+        "Fatura",
+        "Execução de Integração"
+      ],
+      "auth": "API key por secretRef.",
+      "frequency": "por fatura",
+      "requirements": [
+        "sanitizar destinatários",
+        "limitar tamanho total",
+        "registrar providerMessageId",
+        "não armazenar arquivo base64 em log"
+      ],
+      "errorHandling": "Retry seletivo; não gerar novo PDF ou anexo Omie ao reenviar."
+    },
+    {
+      "name": "Renderizador de Documento",
+      "key": "document_renderer",
+      "type": "internal_service",
+      "direction": "internal",
+      "description": "Renderiza template seguro em PDF reproduzível.",
+      "dataObjects": [
+        "Versão de Modelo de Documento",
+        "Fatura"
+      ],
+      "auth": "Interna",
+      "frequency": "por fatura ou preview",
+      "requirements": [
+        "versão congelada do motor",
+        "fontes e assets controlados",
+        "HTML e CSS sanitizados",
+        "hash do PDF",
+        "limites de execução"
+      ],
+      "errorHandling": "Falha rastreável, sem avançar para anexo."
+    }
+  ],
+  "dashboards": [
+    {
+      "name": "Operação de Faturas",
+      "key": "operacao_faturas",
+      "description": "Visão diária de volume, sucesso, falhas e pendências.",
+      "filters": [
+        "período",
+        "empresaOmieId",
+        "status",
+        "etapaAtual",
+        "moeda",
+        "modeloDocumentoId",
+        "nomeCliente"
+      ],
+      "cards": [
+        {
+          "key": "faturas_recebidas",
+          "label": "Recebidas",
+          "metric": "count(faturas)"
+        },
+        {
+          "key": "faturas_concluidas",
+          "label": "Concluídas",
+          "metric": "count(faturas where status=Concluída)"
+        },
+        {
+          "key": "faturas_falha",
+          "label": "Com Falha",
+          "metric": "count(faturas where status=Falha)"
+        },
+        {
+          "key": "aguardando_retry",
+          "label": "Aguardando Retry",
+          "metric": "count(faturas where status=Aguardando retry)"
+        },
+        {
+          "key": "email_pendente",
+          "label": "E-mail Pendente",
+          "metric": "count(faturas com etapa >= Enviando e-mail e providerMessageId vazio)"
+        },
+        {
+          "key": "adiantamento_pendente",
+          "label": "Adiantamento Pendente",
+          "metric": "count(faturas where adiantamentoSolicitado=true and adiantamentoConfirmado=false)"
+        },
+        {
+          "key": "tempo_medio",
+          "label": "Tempo Médio",
+          "metric": "avg(tempoProcessamentoMs)"
+        }
+      ],
+      "charts": [
+        {
+          "type": "bar",
+          "label": "Faturas por Empresa",
+          "groupBy": "empresaOmieId",
+          "metric": "count"
+        },
+        {
+          "type": "line",
+          "label": "Volume por Dia",
+          "groupBy": "createdAt.day",
+          "metric": "count"
+        },
+        {
+          "type": "donut",
+          "label": "Status",
+          "groupBy": "status",
+          "metric": "count"
+        },
+        {
+          "type": "bar",
+          "label": "Falhas por Tipo",
+          "source": "execucoes_integracao",
+          "groupBy": "tipo",
+          "metric": "count where status in [Falha transitória,Falha definitiva]"
+        },
+        {
+          "type": "bar",
+          "label": "Faturas por Moeda",
+          "groupBy": "moeda",
+          "metric": "count"
+        }
+      ]
+    }
+  ],
+  "documents": [
+    {
+      "name": "Fatura Personalizada",
+      "key": "fatura_personalizada",
+      "collection": "faturas",
+      "description": "PDF gerado com base em versão publicada, snapshot da OS, perfil e cotação.",
+      "output": [
+        "pdf"
+      ],
+      "templateCollection": "versoes_modelo_documento",
+      "versioning": "required_and_immutable_after_publish",
+      "preview": {
+        "enabled": true,
+        "source": "numeroOS + empresaOmieId",
+        "externalEffects": false,
+        "watermark": "HOMOLOGAÇÃO"
+      },
+      "allowedVariableGroups": [
+        "empresa",
+        "cliente",
+        "ordemServico",
+        "servicos",
+        "parcelas",
+        "impostos",
+        "moeda",
+        "cotacao",
+        "datas",
+        "configuracoesPublicas"
+      ],
+      "forbiddenVariables": [
+        "appSecret",
+        "apiKeys",
+        "tokens",
+        "senhas",
+        "payloads integrais de integração",
+        "links temporários de anexo"
+      ],
+      "fileNamePattern": "invoice-{numeroOS}-{yyyyMMdd-HHmmss}.pdf",
+      "retention": "Preservar enquanto a fatura e sua auditoria estiverem retidas."
+    }
+  ],
+  "audit": {
+    "enabled": true,
+    "providedBy": "oonCore",
+    "recordReadEvents": false,
+    "recordWriteEvents": true,
+    "recordPipelineTransitions": true,
+    "recordIntegrationExecutions": true,
+    "recordDocumentVersionAndHash": true,
+    "recordManualActionsWithReason": true,
+    "sensitiveDataPolicy": {
+      "redactFields": [
+        "appSecret",
+        "apiKey",
+        "token",
+        "authorization",
+        "password",
+        "cArquivo",
+        "fileBase64"
+      ],
+      "doNotPersist": [
+        "segredo completo",
+        "anexo base64",
+        "corpo bruto com credenciais"
+      ],
+      "maskPersonalDataWherePossible": true
+    },
+    "events": [
+      "webhook_received",
+      "webhook_duplicated",
+      "profile_resolved",
+      "quote_selected",
+      "manual_quote_authorized",
+      "document_generated",
+      "document_attached",
+      "email_sent",
+      "email_resent",
+      "advance_generated",
+      "omie_stage_changed",
+      "retry_scheduled",
+      "manual_reprocess",
+      "process_cancelled",
+      "model_published",
+      "secret_rotated"
+    ]
+  },
+  "nonFunctionalRequirements": [
+    {
+      "category": "Security",
+      "requirement": "Autenticação e RBAC exclusivamente pelo oonCore; nenhuma autenticação paralela."
+    },
+    {
+      "category": "Security",
+      "requirement": "Segredos em Kubernetes Secret ou cofre equivalente, referenciados por secretRef."
+    },
+    {
+      "category": "Security",
+      "requirement": "Redaction obrigatória em logs, auditoria e respostas de erro."
+    },
+    {
+      "category": "Reliability",
+      "requirement": "Webhook persiste evento antes de responder e o processamento ocorre por ticket durável."
+    },
+    {
+      "category": "Reliability",
+      "requirement": "Idempotência em fatura e em cada efeito externo."
+    },
+    {
+      "category": "Reliability",
+      "requirement": "Retry com backoff, limite e classificação de erro."
+    },
+    {
+      "category": "Observability",
+      "requirement": "Correlation ID desde o webhook até todas as execuções."
+    },
+    {
+      "category": "Observability",
+      "requirement": "Métricas por empresa, etapa, integração, erro e duração."
+    },
+    {
+      "category": "Performance",
+      "requirement": "Resposta do webhook sem aguardar geração de PDF ou integrações externas."
+    },
+    {
+      "category": "Performance",
+      "requirement": "Cache de cotação por moeda, data solicitada e boletim."
+    },
+    {
+      "category": "Data Integrity",
+      "requirement": "Snapshot da OS, perfil, modelo e cotação imutáveis após conclusão."
+    },
+    {
+      "category": "Isolation",
+      "requirement": "Todas as entidades operacionais incluem empresaOmieId e não aceitam base informada livremente pelo frontend."
+    },
+    {
+      "category": "Document Reproducibility",
+      "requirement": "Motor, assets e versão do template congelados para reproduzir o PDF."
+    }
+  ],
+  "migration": {
+    "strategy": "parallel_build_characterization_and_phased_cutover",
+    "legacyHandling": [
+      "Não alterar a main dos repositórios legados durante a construção da nova Central, salvo correção crítica independente.",
+      "Usar o backend legado como fonte de regras e os PDFs existentes como referência visual.",
+      "Manter o legado disponível para rollback até estabilização das sete bases."
+    ],
+    "inventory": [
+      "Exportar as sete bases Omie, CNPJs, appKeys mascaradas e referências de credencial.",
+      "Listar gatilhos e etapas de entrada, sucesso e erro por base e perfil.",
+      "Exportar perfis e configurações por cliente.",
+      "Inventariar modelos de documento, assunto, corpo de e-mail, includes, imagens e variáveis.",
+      "Relacionar modelo x empresa x cliente x idioma x moeda x impostos.",
+      "Levantar categoria e conta corrente de adiantamento por empresa.",
+      "Classificar anexos enviados atualmente e identificar documentos internos.",
+      "Selecionar casos reais de homologação, com dados anonimizados quando necessário."
+    ],
+    "dataMapping": [
+      {
+        "legacy": "Tenant",
+        "target": "Não migrar",
+        "rule": "A Central é single-tenant."
+      },
+      {
+        "legacy": "Usuario",
+        "target": "Usuários e RBAC do oonCore",
+        "rule": "Recriar acessos; não migrar senha ou token."
+      },
+      {
+        "legacy": "BaseOmie",
+        "target": "Empresa Omie",
+        "rule": "Migrar metadados; recadastrar segredo em cofre."
+      },
+      {
+        "legacy": "Gatilho",
+        "target": "Perfil de Faturamento + Empresa Omie",
+        "rule": "Separar regra por cliente e empresa e etapas padrão."
+      },
+      {
+        "legacy": "Template",
+        "target": "Modelo de Documento + Versão",
+        "rule": "Migrar como ejs-legado-somente-leitura e converter para template seguro."
+      },
+      {
+        "legacy": "Include",
+        "target": "Assets e variáveis controladas da versão",
+        "rule": "Inventariar e eliminar includes não usados."
+      },
+      {
+        "legacy": "Moeda",
+        "target": "Perfil de Faturamento + Cotação de Moeda",
+        "rule": "Preservar tipo de ajuste e substituir tenant por empresa ou perfil."
+      },
+      {
+        "legacy": "DocumentoTracking",
+        "target": "Fatura + Execução de Integração",
+        "rule": "Migrar apenas histórico necessário ou preservar o legado como consulta."
+      },
+      {
+        "legacy": "Configuracao",
+        "target": "Campos explícitos em Empresa, Perfil ou configuração segura",
+        "rule": "Eliminar chave e valor genérico quando possível."
+      }
+    ],
+    "phases": [
+      {
+        "phase": 0,
+        "name": "Inventário e congelamento de regras",
+        "deliverables": [
+          "matriz de bases",
+          "matriz de modelos",
+          "matriz de perfis",
+          "casos de teste"
+        ]
+      },
+      {
+        "phase": 1,
+        "name": "Testes de caracterização",
+        "deliverables": [
+          "snapshots Omie",
+          "PDFs de referência",
+          "payloads esperados",
+          "cenários de falha"
+        ]
+      },
+      {
+        "phase": 2,
+        "name": "Fundação oonCore",
+        "deliverables": [
+          "Central nova",
+          "coleções",
+          "RBAC",
+          "menu",
+          "secrets",
+          "auditoria"
+        ]
+      },
+      {
+        "phase": 3,
+        "name": "Conectores",
+        "deliverables": [
+          "Omie",
+          "BACEN",
+          "SendGrid",
+          "normalização de erros"
+        ]
+      },
+      {
+        "phase": 4,
+        "name": "Motor documental",
+        "deliverables": [
+          "versionamento",
+          "preview",
+          "conversão de modelos prioritários",
+          "comparação visual"
+        ]
+      },
+      {
+        "phase": 5,
+        "name": "Pipeline completo",
+        "deliverables": [
+          "inbox",
+          "idempotência",
+          "tickets",
+          "retries",
+          "dashboard",
+          "ações operacionais"
+        ]
+      },
+      {
+        "phase": 6,
+        "name": "Piloto",
+        "deliverables": [
+          "uma base",
+          "BRL",
+          "USD",
+          "EUR",
+          "modo comparação sem efeitos externos"
+        ]
+      },
+      {
+        "phase": 7,
+        "name": "Rollout por CNPJ",
+        "deliverables": [
+          "ativação em ondas",
+          "monitoramento",
+          "rollback",
+          "desativação dos webhooks legados"
+        ]
+      }
+    ]
+  },
+  "testScenarios": [
+    {
+      "key": "os_brl_sucesso",
+      "description": "OS em BRL, documento, anexo, e-mail, adiantamento e etapa concluídos."
+    },
+    {
+      "key": "os_usd_ptax_mesmo_dia",
+      "description": "OS em USD com Fechamento PTAX disponível na data."
+    },
+    {
+      "key": "os_eur_dia_sem_cotacao",
+      "description": "OS em EUR usa último dia útil publicado anterior."
+    },
+    {
+      "key": "perfil_impostos_especifico",
+      "description": "Cliente com parâmetros fiscais próprios."
+    },
+    {
+      "key": "idioma_ingles",
+      "description": "Modelo e e-mail em en-US."
+    },
+    {
+      "key": "sem_email",
+      "description": "Ausência de destinatário gera falha operacional antes do envio."
+    },
+    {
+      "key": "anexos_permitidos",
+      "description": "Somente fatura e anexos allowlisted são enviados."
+    },
+    {
+      "key": "anexo_interno_excluido",
+      "description": "Documento interno não é enviado ao cliente."
+    },
+    {
+      "key": "webhook_duplicado",
+      "description": "Mesmo evento retorna sucesso idempotente sem novo efeito."
+    },
+    {
+      "key": "retry_email",
+      "description": "Falha de e-mail repete somente o envio."
+    },
+    {
+      "key": "retry_adiantamento",
+      "description": "Falha no adiantamento não regenera PDF, anexo ou e-mail."
+    },
+    {
+      "key": "os_ja_adiantada",
+      "description": "Consulta identifica adiantamento já aplicado e não duplica."
+    },
+    {
+      "key": "falha_omie_transitoria",
+      "description": "Timeout gera aguardando retry com backoff."
+    },
+    {
+      "key": "falha_omie_negocio",
+      "description": "Erro de dados gera falha operacional e ação recomendada."
+    },
+    {
+      "key": "falha_bacen",
+      "description": "Indisponibilidade temporária gera retry; ausência no limite gera falha."
+    },
+    {
+      "key": "modelo_nao_publicado",
+      "description": "Processamento bloqueado quando não há versão publicada."
+    },
+    {
+      "key": "base_inativa",
+      "description": "Evento de base inativa é persistido e rejeitado sem efeito."
+    },
+    {
+      "key": "isolamento_empresas",
+      "description": "Usuário e integração não acessam credencial ou dados de outra empresa."
+    },
+    {
+      "key": "segredos_logs",
+      "description": "Logs e auditoria não contêm appSecret, token ou arquivo base64."
+    },
+    {
+      "key": "preview_sem_efeito",
+      "description": "Preview gera PDF com marca d'água sem anexar, enviar ou alterar OS."
+    }
+  ],
+  "acceptanceCriteria": [
+    "A Central utiliza autenticação, RBAC, CRUD, auditoria, documentos e esteiras do oonCore, sem infraestrutura paralela.",
+    "A arquitetura é single-tenant para a Europartner e suporta as sete empresas Omie de forma isolada.",
+    "Somente OrdemServico.EtapaAlterada inicia processamento no MVP.",
+    "Todo webhook válido é persistido antes de qualquer efeito externo.",
+    "O mesmo evento ou chave funcional não cria mais de uma fatura.",
+    "Documento, anexo, e-mail, adiantamento e alteração de etapa possuem idempotência independente.",
+    "A fatura registra snapshot da OS, cliente, perfil, versão do modelo e cotação.",
+    "BRL usa cotação 1; USD e EUR usam Fechamento PTAX ou último dia útil anterior.",
+    "A cotação usada permanece imutável em retries e depois da conclusão.",
+    "Somente versões publicadas de modelo são usadas automaticamente.",
+    "O PDF gerado possui hash, nome, versão e arquivo preservados.",
+    "O anexo da fatura é incluído uma única vez na Ordem de Serviço.",
+    "Anexos da OS enviados por e-mail obedecem allowlist e exclusões do perfil.",
+    "Destinatários são sanitizados e deduplicados; ausência de e-mail gera erro operacional compreensível.",
+    "O envio registra destinatários, data e providerMessageId quando disponível.",
+    "O adiantamento consulta o estado atual e não pode ser duplicado.",
+    "A Ordem de Serviço só vai para a etapa de sucesso após todos os efeitos obrigatórios.",
+    "Falhas transitórias entram em retry com limite; falhas de negócio ficam visíveis para a operação.",
+    "O reprocessamento seletivo não repete etapas já concluídas.",
+    "Toda ação manual crítica exige permissão, usuário, data e justificativa.",
+    "Segredos não são armazenados em campos funcionais, retornados ao frontend ou persistidos em logs.",
+    "O dashboard apresenta volume, status, falhas, retries, e-mails e adiantamentos por empresa.",
+    "Os modelos prioritários homologados produzem PDFs equivalentes às referências aprovadas.",
+    "O rollout é executado por CNPJ e possui estratégia de rollback para o legado."
+  ],
+  "outOfScope": [
+    "Multi-tenant ou onboarding self-service de novos clientes.",
+    "Uso da solução como produto genérico Doc-Custom.",
+    "Pedido de Venda, CRM, Pedido de Compra ou outros objetos Omie no MVP.",
+    "Copilotos de IA, prompts e assistentes.",
+    "Edição livre de JavaScript ou EJS por usuários finais.",
+    "OCR, leitura automática de documentos ou classificação por IA.",
+    "Emissão de Nota Fiscal e geração de Contas a Receber, salvo novo escopo aprovado.",
+    "Conciliação bancária ou acompanhamento de pagamento.",
+    "Aplicativo móvel.",
+    "Substituição do Omie como sistema transacional.",
+    "Migração de senhas, tokens, appSecrets ou API keys do banco legado.",
+    "Alteração dos repositórios legados como estratégia principal de implementação."
+  ],
+  "openQuestions": [
+    {
+      "key": "lista_empresas",
+      "question": "Quais são os nomes, CNPJs, códigos internos e aplicativos Omie das sete empresas?",
+      "blockingFor": "configuração e rollout",
+      "owner": "Europartner/OonDemand"
+    },
+    {
+      "key": "etapas_por_empresa",
+      "question": "Quais são os códigos exatos das etapas de entrada, sucesso e erro em cada base e perfil?",
+      "blockingFor": "webhook e mudança de etapa",
+      "owner": "Europartner"
+    },
+    {
+      "key": "inventario_modelos",
+      "question": "Qual é a relação oficial de modelos ativos e sua associação com cliente, empresa, idioma, moeda e impostos?",
+      "blockingFor": "migração documental",
+      "owner": "Europartner/OonDemand"
+    },
+    {
+      "key": "data_cotacao",
+      "question": "A data de referência padrão deve ser data da OS, previsão da OS ou data de processamento?",
+      "blockingFor": "regra BACEN",
+      "owner": "Europartner"
+    },
+    {
+      "key": "compra_ou_venda",
+      "question": "Qual campo PTAX deve alimentar a cotação efetiva por perfil: compra, venda ou regra específica?",
+      "blockingFor": "regra BACEN",
+      "owner": "Europartner"
+    },
+    {
+      "key": "anexos",
+      "question": "Quais tipos, nomes e categorias de anexos da OS podem ser enviados ao cliente?",
+      "blockingFor": "política de anexos",
+      "owner": "Europartner"
+    },
+    {
+      "key": "adiantamento",
+      "question": "Qual categoria, conta corrente e comportamento de parcelas deve ser aplicado em cada empresa?",
+      "blockingFor": "adiantamento",
+      "owner": "Europartner"
+    },
+    {
+      "key": "email",
+      "question": "Quais remetentes, domínios, cópias padrão e limites de tamanho devem ser usados por empresa?",
+      "blockingFor": "envio de e-mail",
+      "owner": "Europartner/OonDemand"
+    },
+    {
+      "key": "retencao",
+      "question": "Qual prazo de retenção é exigido para PDFs, snapshots, eventos e logs de integração?",
+      "blockingFor": "política de dados",
+      "owner": "Europartner/OonDemand"
+    },
+    {
+      "key": "modelos_prioritarios",
+      "question": "Quais modelos e clientes formarão o piloto BRL, USD e EUR?",
+      "blockingFor": "piloto",
+      "owner": "Europartner"
+    }
+  ],
+  "implementationGuidelines": {
+    "oonCore": [
+      "Usar @oondemand/oon-core-back e @oondemand/oon-core-front na versão estável definida no início da implementação.",
+      "A Central contém somente domínio, validações, triggers, pipelines, documentos e integrações.",
+      "Não criar modelos próprios de tenant, autenticação, sessão, usuário ou auditoria.",
+      "Rotas customizadas somente para webhook, preview e ações que o CRUD ou metadata não resolver.",
+      "Toda integração relevante gera Execução de Integração e ticket operacional."
+    ],
+    "backendStructure": [
+      "backend/src/models",
+      "backend/src/validations",
+      "backend/src/triggers",
+      "backend/src/hooks",
+      "backend/src/mappings",
+      "backend/src/documents",
+      "backend/src/pipelines",
+      "backend/src/integrations/omie",
+      "backend/src/integrations/bacen",
+      "backend/src/integrations/sendgrid",
+      "backend/src/services"
+    ],
+    "frontend": [
+      "Usar shell, roteamento, datagrid, formulários, documentos e esteiras do Core.",
+      "Priorizar metadata; overrides apenas para preview, visualização de PDF e ações operacionais específicas.",
+      "No detalhe da fatura, usar abas Resumo, OS/Cliente, Documento, Cotação, E-mail, Adiantamento, Integrações e Auditoria.",
+      "Segredos são exibidos apenas como configurados ou não configurados."
+    ],
+    "doNot": [
+      "Não processar o pipeline completo dentro do controller do webhook.",
+      "Não confiar em empresa, perfil ou permissão enviados livremente pelo frontend.",
+      "Não logar payload Omie bruto contendo app_key ou app_secret.",
+      "Não enviar todos os anexos da OS sem política explícita.",
+      "Não recalcular cotação de fatura concluída.",
+      "Não permitir edição de versão publicada.",
+      "Não engolir erro de alteração de etapa ou anexo."
+    ]
+  }
+}
