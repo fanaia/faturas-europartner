@@ -1,0 +1,12 @@
+{
+  "SERVICE_NAME": "faturas-europartner",
+  "NAMESPACE": "faturas-europartner",
+  "IMAGE": "ghcr.io/fanaia/faturas-europartner-backend",
+  "IMAGE_TAG": "latest",
+  "HOST": "faturas-europartner.central.oondemand.online",
+  "CENTRAL_ATIVACAO_URL": "https://central-ativacao.central.oondemand.online",
+  "APP_CODE": "faturas-europartner",
+  "REPLICAS": "1",
+  "HPA_MIN": "1",
+  "HPA_MAX": "3"
+}

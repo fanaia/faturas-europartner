@@ -1,0 +1,709 @@
+{
+  "name": "Central Faturas Europartner",
+  "slug": "faturas-europartner",
+  "schemaVersion": 2,
+  "backend": {
+    "metadataUrl": "/core/metadata"
+  },
+  "layout": {
+    "shell": "default",
+    "sidebar": "core",
+    "topbar": "core",
+    "assistant": "none",
+    "footer": "core",
+    "main": "core"
+  },
+  "navigation": {
+    "mode": "auto"
+  },
+  "pages": [
+    {
+      "id": "visao-geral",
+      "path": "/",
+      "label": "Visão Geral",
+      "title": "Operação de Faturas",
+      "section": "Operação",
+      "order": 1,
+      "blocks": [
+        {
+          "type": "markdown",
+          "content": "Acompanhe as faturas por etapa. Falhas e retries permanecem visíveis e podem ser retomados sem repetir os efeitos concluídos."
+        },
+        {
+          "type": "dashboard.kpi",
+          "id": "kpi-faturas",
+          "endpoint": "/api/dashboard/faturas"
+        },
+        {
+          "type": "pipeline.board",
+          "id": "pipeline-resumo",
+          "model": "Fatura",
+          "stageField": "etapaAtual"
+        }
+      ]
+    }
+  ],
+  "collections": [
+    {
+      "model": "Fatura",
+      "mode": "dynamic",
+      "path": "/faturas",
+      "label": "Faturas",
+      "section": "Operação",
+      "list": {
+        "filters": [
+          {
+            "field": "empresaOmie",
+            "label": "Empresa",
+            "type": "ref"
+          },
+          {
+            "field": "status",
+            "label": "Status",
+            "type": "select",
+            "options": [
+              {
+                "label": "Todos",
+                "value": ""
+              },
+              {
+                "label": "Pendente",
+                "value": "pendente"
+              },
+              {
+                "label": "Processando",
+                "value": "em_processamento"
+              },
+              {
+                "label": "Concluída",
+                "value": "concluida"
+              },
+              {
+                "label": "Aguardando retry",
+                "value": "aguardando_retry"
+              },
+              {
+                "label": "Falha",
+                "value": "falha"
+              }
+            ]
+          },
+          {
+            "field": "moeda",
+            "label": "Moeda",
+            "type": "select",
+            "options": [
+              {
+                "label": "Todas",
+                "value": ""
+              },
+              {
+                "label": "BRL",
+                "value": "BRL"
+              },
+              {
+                "label": "USD",
+                "value": "USD"
+              },
+              {
+                "label": "EUR",
+                "value": "EUR"
+              }
+            ]
+          },
+          {
+            "field": "nomeCliente",
+            "label": "Cliente",
+            "type": "text"
+          }
+        ],
+        "columns": [
+          "numeroOS",
+          "empresaOmie",
+          "nomeCliente",
+          "moeda",
+          "cotacaoEfetiva",
+          "etapaAtual",
+          "status",
+          "tentativas",
+          "ultimoErroMensagem"
+        ],
+        "rowActions": [
+          {
+            "id": "detalhar",
+            "label": "Detalhar",
+            "icon": "edit",
+            "type": "openDetailModal",
+            "initialTab": "resumo"
+          },
+          {
+            "id": "reprocessar-preparacao",
+            "label": "Reprocessar preparação",
+            "icon": "refresh",
+            "type": "apiAction",
+            "method": "POST",
+            "endpoint": "/api/faturas/:id/reprocessar-preparacao",
+            "refresh": [
+              "self",
+              "integracoes",
+              "all"
+            ],
+            "roles": [
+              "administrador",
+              "gestor_faturamento",
+              "operacao_faturamento"
+            ]
+          },
+          {
+            "id": "reprocessar",
+            "label": "Reprocessar",
+            "icon": "refresh",
+            "type": "apiAction",
+            "method": "POST",
+            "endpoint": "/api/faturas/:id/reprocessar",
+            "refresh": [
+              "self",
+              "integracoes",
+              "all"
+            ],
+            "roles": [
+              "administrador",
+              "gestor_faturamento",
+              "operacao_faturamento"
+            ]
+          },
+          {
+            "id": "reanexar",
+            "label": "Reanexar no Omie",
+            "icon": "file",
+            "type": "apiAction",
+            "method": "POST",
+            "endpoint": "/api/faturas/:id/reanexar",
+            "confirm": {
+              "title": "Reanexar documento",
+              "description": "A Central verificará a execução e anexará novamente o PDF preservado."
+            },
+            "refresh": [
+              "self",
+              "integracoes"
+            ],
+            "roles": [
+              "administrador",
+              "gestor_faturamento",
+              "operacao_faturamento"
+            ]
+          },
+          {
+            "id": "reenviar",
+            "label": "Reenviar e-mail",
+            "icon": "mail",
+            "type": "apiAction",
+            "method": "POST",
+            "endpoint": "/api/faturas/:id/reenviar-email",
+            "confirm": {
+              "title": "Reenviar fatura",
+              "description": "O e-mail será enviado novamente sem duplicar o anexo ou o adiantamento."
+            },
+            "refresh": [
+              "self",
+              "integracoes"
+            ],
+            "roles": [
+              "administrador",
+              "gestor_faturamento",
+              "operacao_faturamento"
+            ]
+          },
+          {
+            "id": "adiantamento",
+            "label": "Reprocessar adiantamento",
+            "icon": "refresh",
+            "type": "apiAction",
+            "method": "POST",
+            "endpoint": "/api/faturas/:id/reprocessar-adiantamento",
+            "confirm": {
+              "title": "Reprocessar adiantamento",
+              "description": "O estado atual da OS será consultado antes de qualquer alteração."
+            },
+            "refresh": [
+              "self",
+              "integracoes"
+            ],
+            "roles": [
+              "administrador",
+              "gestor_faturamento"
+            ]
+          }
+        ]
+      },
+      "relations": {
+        "integracoes": {
+          "model": "ExecucaoIntegracao",
+          "foreignKey": "fatura",
+          "parentKey": "_id",
+          "label": "Integrações"
+        }
+      },
+      "detailModal": {
+        "enabled": true,
+        "titleField": "numeroOS",
+        "size": "full",
+        "defaultTab": "resumo",
+        "tabs": [
+          {
+            "id": "resumo",
+            "label": "Resumo",
+            "type": "summary",
+            "cards": [
+              {
+                "label": "Status",
+                "field": "status",
+                "format": "badge"
+              },
+              {
+                "label": "Etapa",
+                "field": "etapaAtual",
+                "format": "badge"
+              },
+              {
+                "label": "Moeda",
+                "field": "moeda"
+              },
+              {
+                "label": "Cotação",
+                "field": "cotacaoEfetiva",
+                "format": "number"
+              },
+              {
+                "label": "Integrações",
+                "source": "relatedCount",
+                "relation": "integracoes"
+              }
+            ]
+          },
+          {
+            "id": "os-cliente",
+            "label": "OS / Cliente",
+            "type": "form",
+            "groups": [
+              {
+                "label": "Ordem de Serviço",
+                "fields": [
+                  "empresaOmie",
+                  "codigoOS",
+                  "numeroOS",
+                  "etapaOrigem"
+                ],
+                "columns": 2
+              },
+              {
+                "label": "Cliente",
+                "fields": [
+                  "codigoClienteOmie",
+                  "nomeCliente",
+                  "emailCliente",
+                  "paisCliente"
+                ],
+                "columns": 2
+              }
+            ]
+          },
+          {
+            "id": "documento",
+            "label": "Documento",
+            "type": "form",
+            "groups": [
+              {
+                "label": "Modelo",
+                "fields": [
+                  "modeloDocumento",
+                  "versaoModelo",
+                  "idioma",
+                  "nomeArquivo"
+                ],
+                "columns": 2
+              },
+              {
+                "label": "Rastreabilidade",
+                "fields": [
+                  "pdfHash",
+                  "anexoOmieId"
+                ],
+                "columns": 2
+              }
+            ]
+          },
+          {
+            "id": "cotacao",
+            "label": "Cotação",
+            "type": "form",
+            "groups": [
+              {
+                "label": "Cotação congelada",
+                "fields": [
+                  "moeda",
+                  "dataReferenciaCotacao",
+                  "cotacaoOficial",
+                  "tipoAjusteCotacao",
+                  "valorAjusteCotacao",
+                  "cotacaoEfetiva"
+                ],
+                "columns": 3
+              }
+            ]
+          },
+          {
+            "id": "email",
+            "label": "E-mail",
+            "type": "form",
+            "groups": [
+              {
+                "label": "Envio",
+                "fields": [
+                  "destinatarios",
+                  "copias",
+                  "providerMessageId"
+                ],
+                "columns": 1
+              }
+            ]
+          },
+          {
+            "id": "adiantamento",
+            "label": "Adiantamento",
+            "type": "form",
+            "groups": [
+              {
+                "label": "Situação",
+                "fields": [
+                  "adiantamentoSolicitado",
+                  "adiantamentoConfirmado"
+                ],
+                "columns": 2
+              }
+            ]
+          },
+          {
+            "id": "integracoes",
+            "label": "Integrações",
+            "type": "readonlyGrid",
+            "relation": "integracoes",
+            "columns": [
+              "tipo",
+              "sistema",
+              "status",
+              "tentativaAtual",
+              "proximaTentativaEm",
+              "erroCodigo",
+              "erroMensagem",
+              "duracaoMs"
+            ]
+          },
+          {
+            "id": "operacao",
+            "label": "Operação",
+            "type": "form",
+            "groups": [
+              {
+                "label": "Processamento",
+                "fields": [
+                  "status",
+                  "etapaAtual",
+                  "tentativas",
+                  "proximaTentativaEm",
+                  "iniciadaEm",
+                  "concluidaEm",
+                  "tempoProcessamentoMs"
+                ],
+                "columns": 2
+              },
+              {
+                "label": "Falha / decisão",
+                "fields": [
+                  "ultimoErroCodigo",
+                  "ultimoErroMensagem",
+                  "acaoRecomendada",
+                  "observacaoProcessamento",
+                  "motivoCancelamento"
+                ],
+                "columns": 1
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "model": "ExecucaoIntegracao",
+      "mode": "dynamic",
+      "path": "/integracoes",
+      "label": "Execuções de Integração",
+      "section": "Operação",
+      "list": {
+        "columns": [
+          "fatura",
+          "empresaOmie",
+          "tipo",
+          "sistema",
+          "status",
+          "tentativaAtual",
+          "proximaTentativaEm",
+          "erroCodigo",
+          "erroMensagem",
+          "duracaoMs"
+        ]
+      }
+    },
+    {
+      "model": "EventoWebhook",
+      "mode": "dynamic",
+      "path": "/eventos",
+      "label": "Eventos Omie",
+      "section": "Operação",
+      "list": {
+        "columns": [
+          "recebidoEm",
+          "empresaOmie",
+          "topic",
+          "codigoOS",
+          "etapa",
+          "status",
+          "motivo",
+          "fatura"
+        ],
+        "rowActions": [
+          {
+            "id": "reprocessar",
+            "label": "Reprocessar evento",
+            "icon": "refresh",
+            "type": "apiAction",
+            "method": "POST",
+            "endpoint": "/api/eventos/:id/reprocessar",
+            "disabledWhen": {
+              "field": "status",
+              "in": [
+                "ignorado",
+                "duplicado"
+              ]
+            },
+            "refresh": [
+              "self",
+              "all"
+            ],
+            "roles": [
+              "administrador",
+              "gestor_faturamento",
+              "operacao_faturamento"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "model": "PerfilFaturamento",
+      "mode": "dynamic",
+      "path": "/perfis-faturamento",
+      "label": "Perfis de Faturamento",
+      "section": "Configurações",
+      "list": {
+        "columns": [
+          "nome",
+          "empresaOmie",
+          "nomeCliente",
+          "codigoClienteOmie",
+          "modeloDocumento",
+          "idioma",
+          "moeda",
+          "gerarAdiantamento",
+          "status"
+        ]
+      }
+    },
+    {
+      "model": "ModeloDocumento",
+      "mode": "dynamic",
+      "path": "/modelos",
+      "label": "Modelos",
+      "section": "Documentos",
+      "relations": {
+        "versoes": {
+          "model": "VersaoModeloDocumento",
+          "foreignKey": "modeloDocumento",
+          "parentKey": "_id"
+        }
+      },
+      "detailModal": {
+        "enabled": true,
+        "titleField": "nome",
+        "size": "full",
+        "defaultTab": "dados",
+        "tabs": [
+          {
+            "id": "dados",
+            "label": "Modelo",
+            "type": "form",
+            "groups": [
+              {
+                "label": "Identificação",
+                "fields": [
+                  "codigo",
+                  "nome",
+                  "descricao",
+                  "idiomasSuportados",
+                  "status"
+                ],
+                "columns": 2
+              }
+            ]
+          },
+          {
+            "id": "versoes",
+            "label": "Versões",
+            "type": "relatedGrid",
+            "relation": "versoes",
+            "editable": false,
+            "columns": [
+              "versao",
+              "idioma",
+              "motor",
+              "status",
+              "hashConteudo",
+              "publicadoEm"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "model": "VersaoModeloDocumento",
+      "mode": "dynamic",
+      "path": "/versoes-modelos",
+      "label": "Versões de Modelos",
+      "section": "Documentos",
+      "list": {
+        "columns": [
+          "modeloDocumento",
+          "versao",
+          "idioma",
+          "motor",
+          "status",
+          "hashConteudo",
+          "publicadoEm"
+        ],
+        "rowActions": [
+          {
+            "id": "publicar",
+            "label": "Publicar",
+            "icon": "check",
+            "type": "apiAction",
+            "method": "POST",
+            "endpoint": "/api/modelos/versoes/:id/publicar",
+            "confirm": {
+              "title": "Publicar versão",
+              "description": "A versão ficará imutável e será usada em novos processamentos do mesmo idioma."
+            },
+            "disabledWhen": {
+              "field": "status",
+              "in": [
+                "publicado",
+                "substituido",
+                "arquivado"
+              ]
+            },
+            "refresh": [
+              "self",
+              "all"
+            ],
+            "roles": [
+              "administrador",
+              "gestor_faturamento"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "model": "CotacaoMoeda",
+      "mode": "dynamic",
+      "path": "/cotacoes",
+      "label": "Cotações",
+      "section": "Documentos",
+      "list": {
+        "columns": [
+          "moeda",
+          "dataSolicitada",
+          "dataEfetiva",
+          "tipoBoletim",
+          "cotacaoCompra",
+          "cotacaoVenda",
+          "origem",
+          "status"
+        ]
+      }
+    },
+    {
+      "model": "EmpresaOmie",
+      "mode": "dynamic",
+      "path": "/empresas",
+      "label": "Empresas Omie",
+      "section": "Configurações",
+      "list": {
+        "columns": [
+          "nome",
+          "razaoSocial",
+          "cnpj",
+          "codigoInterno",
+          "appKeyMasked",
+          "status",
+          "ultimaComunicacaoSucessoEm",
+          "ultimoErroComunicacao"
+        ],
+        "rowActions": [
+          {
+            "id": "testar",
+            "label": "Testar configuração",
+            "icon": "refresh",
+            "type": "apiAction",
+            "method": "POST",
+            "endpoint": "/api/empresas-omie/:id/testar-conexao",
+            "refresh": [
+              "self"
+            ],
+            "roles": [
+              "administrador"
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "pipelines": [
+    {
+      "name": "ProcessamentoFatura",
+      "model": "Fatura",
+      "label": "Esteira de Faturas",
+      "stageField": "etapaAtual",
+      "path": "/esteira-faturas",
+      "section": "Operação"
+    },
+    {
+      "name": "PublicacaoModelo",
+      "model": "VersaoModeloDocumento",
+      "label": "Publicação de Modelos",
+      "stageField": "status",
+      "path": "/esteira-modelos",
+      "section": "Documentos"
+    }
+  ],
+  "documents": [
+    {
+      "model": "Fatura",
+      "mode": "dynamic",
+      "path": "/documentos/faturas",
+      "label": "Documentos de Fatura",
+      "section": "Documentos",
+      "approval": false,
+      "attachments": true
+    }
+  ]
+}

@@ -1,0 +1,17 @@
+{
+  "name": "faturas-europartner",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Central Oon exclusiva para geração e processamento de faturas da Europartner.",
+  "scripts": {
+    "ooncore:docs": "create-central-oon docs --sync",
+    "ooncore:docs:check": "create-central-oon docs --check",
+    "dev:backend": "npm run dev --prefix backend",
+    "dev:frontend": "npm run dev --prefix frontend",
+    "test": "npm test --prefix backend",
+    "check": "npm run check --prefix backend && npm run check --prefix frontend"
+  },
+  "devDependencies": {
+    "@oondemand/create-central-oon": "^0.3.36"
+  }
+}
