@@ -1,22 +1,27 @@
 const axios = require("axios");
-const { readOmieCredentials } = require("../../lib/secrets");
+const { getCompanyCredentials, getCentralConfiguration } = require("../../services/configurationService");
 const { OperationalError, normalizeError } = require("../../lib/error");
 
-const client = axios.create({
-  baseURL: process.env.OMIE_API_URL || "https://app.omie.com.br/api/v1/",
-  timeout: Number(process.env.OMIE_TIMEOUT_MS || 20_000),
-  headers: { "Content-Type": "application/json" },
-});
-
 async function callOmie(empresa, endpoint, call, param) {
-  const credentials = readOmieCredentials(empresa.secretRef);
+  const [credentials, configuration] = await Promise.all([
+    getCompanyCredentials(empresa),
+    getCentralConfiguration(),
+  ]);
+  const url = new URL(String(endpoint || "").replace(/^\/+/, ""), configuration.omieApiUrl).toString();
   try {
-    const response = await client.post(endpoint, {
-      call,
-      app_key: credentials.appKey,
-      app_secret: credentials.appSecret,
-      param: Array.isArray(param) ? param : [param],
-    });
+    const response = await axios.post(
+      url,
+      {
+        call,
+        app_key: credentials.appKey,
+        app_secret: credentials.appSecret,
+        param: Array.isArray(param) ? param : [param],
+      },
+      {
+        timeout: Number(configuration.omieTimeoutMs || 20000),
+        headers: { "Content-Type": "application/json" },
+      }
+    );
     if (response.data?.faultstring) {
       throw new OperationalError(response.data.faultstring, { code: response.data.faultcode || "OMIE_FAULT" });
     }
