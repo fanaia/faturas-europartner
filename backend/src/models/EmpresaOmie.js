@@ -10,10 +10,7 @@ const entry = defineModel({
     razaoSocial: fields.string({ required: true, label: "Razão Social" }),
     cnpj: withOptions(fields.string({ required: true, label: "CNPJ" }), { unique: true }),
     codigoInterno: withOptions(fields.string({ required: true, label: "Código Interno" }), { unique: true }),
-    appKeyMasked: fields.string({ label: "App Key" }),
-    secretRef: fields.string({ required: true, label: "Referência do Segredo Omie", searchable: false }),
-    webhookTokenRef: fields.string({ required: true, label: "Referência do Token do Webhook", searchable: false }),
-    emailProviderSecretRef: fields.string({ label: "Referência do Segredo de E-mail", default: "SENDGRID_API_KEY", searchable: false }),
+    appKeyMasked: fields.string({ label: "App Key", searchable: false }),
     etapaEntradaPadrao: fields.string({ required: true, label: "Etapa de Entrada" }),
     etapaSucessoPadrao: fields.string({ required: true, label: "Etapa de Sucesso" }),
     etapaErroPadrao: fields.string({ required: true, label: "Etapa de Erro" }),
@@ -33,5 +30,10 @@ const entry = defineModel({
   crud: { enabled: true, roles: { write: ["administrador"] } },
 });
 
+entry.mongooseModel.schema.add({
+  appKeyEncrypted: { type: String, select: false },
+  appSecretEncrypted: { type: String, select: false },
+  webhookTokenEncrypted: { type: String, select: false },
+});
 entry.mongooseModel.schema.index({ status: 1, codigoInterno: 1 });
 module.exports = entry;
