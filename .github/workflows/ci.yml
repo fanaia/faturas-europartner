@@ -26,8 +26,10 @@ jobs:
         run: npm run check:dependencies --prefix backend
       - name: Install frontend dependencies
         run: npm install --prefix frontend --ignore-scripts --no-audit --no-fund
-      - name: Static checks
-        run: npm run check
+      - name: Backend static checks
+        run: npm run check --prefix backend
+      - name: Frontend static checks and typecheck
+        run: npm run check --prefix frontend
       - name: Unit tests
         run: npm test
       - name: Frontend build
