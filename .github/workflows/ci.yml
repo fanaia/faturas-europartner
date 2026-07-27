@@ -22,6 +22,8 @@ jobs:
         run: npm install --ignore-scripts --no-audit --no-fund
       - name: Install backend dependencies
         run: npm install --prefix backend --ignore-scripts --no-audit --no-fund
+      - name: Verify backend runtime dependencies
+        run: npm run check:dependencies --prefix backend
       - name: Install frontend dependencies
         run: npm install --prefix frontend --ignore-scripts --no-audit --no-fund
       - name: Static checks
