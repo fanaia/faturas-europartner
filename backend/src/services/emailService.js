@@ -1,5 +1,5 @@
 const sgMail = require("@sendgrid/mail");
-const { readSecret } = require("../lib/secrets");
+const { getSendgridApiKey } = require("./configurationService");
 const { normalizeEmails } = require("../lib/list");
 const { OperationalError } = require("../lib/error");
 
@@ -9,8 +9,7 @@ async function sendInvoiceEmail({ empresa, profile, fatura, clientEmail, osEmail
   if (!to.length) {
     throw new OperationalError("Nenhum destinatário válido foi encontrado.", { code: "EMAIL_RECIPIENT_REQUIRED" });
   }
-  const apiKey = readSecret(empresa.emailProviderSecretRef || "SENDGRID_API_KEY");
-  sgMail.setApiKey(apiKey);
+  sgMail.setApiKey(await getSendgridApiKey());
   const attachments = [
     {
       content: pdfBuffer.toString("base64"),
