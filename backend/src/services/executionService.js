@@ -1,6 +1,7 @@
 const { model } = require("../lib/model");
 const { normalizeError } = require("../lib/error");
 const { nextRetryAt } = require("./retry");
+const { getCentralConfiguration } = require("./configurationService");
 
 function safeParse(value) {
   if (!value) return undefined;
@@ -23,7 +24,9 @@ async function runStep({
   fn,
 }) {
   const Execucao = model("ExecucaoIntegracao");
-  const maxAttempts = Number(process.env.PROCESSOR_MAX_ATTEMPTS || 5);
+  const configuration = await getCentralConfiguration();
+  const maxAttempts = Number(configuration.processorMaxAttempts || 5);
+  const retryBaseMs = Number(configuration.processorRetryBaseMs || 30000);
   let execution = await Execucao.findOne({ chaveIdempotencia: key });
   if (execution?.status === "concluida") {
     return { skipped: true, execution, result: safeParse(execution.responseResumoJson) };
@@ -70,7 +73,9 @@ async function runStep({
     execution.erroMensagem = normalized.message;
     execution.finalizadaEm = new Date();
     execution.duracaoMs = Date.now() - started;
-    execution.proximaTentativaEm = canRetry ? nextRetryAt(execution.tentativaAtual) : undefined;
+    execution.proximaTentativaEm = canRetry
+      ? nextRetryAt(execution.tentativaAtual, Date.now(), retryBaseMs)
+      : undefined;
     await execution.save();
     error.execution = execution;
     error.normalized = normalized;
