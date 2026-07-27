@@ -1,6 +1,6 @@
 # Manual do Usuário — Central Faturas Europartner
 
-**Versão:** 2.0  
+**Versão:** 2.1  
 **Público:** consultores, administradores e usuários responsáveis pela implantação e operação.  
 **Ponto de partida:** Central publicada, ativada e acessível pelo navegador.
 
@@ -71,7 +71,7 @@ Faça a implantação nesta sequência:
 11. habilitar o processamento automático;
 12. repetir a homologação para as demais empresas, clientes e moedas.
 
-Durante a implantação inicial, mantenha as empresas com status **Homologação** e o processamento automático desabilitado até concluir os cadastros mínimos.
+O processamento automático é criado **desabilitado** após a ativação. Mantenha as empresas com status **Homologação** até concluir os cadastros mínimos e a validação ponta a ponta.
 
 ---
 
@@ -122,7 +122,7 @@ Altere somente quando a OonDemand ou o Omie orientar o uso de outro endpoint.
 
 ### Timeout Omie
 
-Tempo máximo de espera por uma resposta da API do Omie.
+Tempo máximo de espera por uma resposta da API do Omie, incluindo o download de anexos.
 
 Valor inicial recomendado:
 
