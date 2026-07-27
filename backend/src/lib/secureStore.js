@@ -41,7 +41,7 @@ async function getEncryptionKey() {
         bacenPtaxUrl: "https://olinda.bcb.gov.br/olinda/servico/PTAX/versao/v1/odata",
         bacenTimeoutMs: 15000,
         bacenMaxLookbackDays: 30,
-        processorEnabled: true,
+        processorEnabled: false,
         processorPollIntervalMs: 5000,
         processorBatchSize: 10,
         processorLockMs: 300000,
