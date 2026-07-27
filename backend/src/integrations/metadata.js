@@ -5,7 +5,7 @@ registry.registerIntegration("Omie", {
   direction: "bidirectional",
   resources: ["servicos/os", "geral/clientes", "geral/paises", "geral/anexo"],
   trackingModel: "ExecucaoIntegracao",
-  secrets: "EmpresaOmie.secretRef",
+  configuration: "Configurações > Empresas Omie",
 });
 
 registry.registerIntegration("BACEN PTAX", {
@@ -13,13 +13,14 @@ registry.registerIntegration("BACEN PTAX", {
   direction: "inbound",
   resource: "CotacaoMoedaDia",
   trackingModel: "ExecucaoIntegracao",
+  configuration: "Configurações > Configurações",
 });
 
 registry.registerIntegration("SendGrid", {
   name: "SendGrid",
   direction: "outbound",
   trackingModel: "ExecucaoIntegracao",
-  secrets: "EmpresaOmie.emailProviderSecretRef",
+  configuration: "Configurações > Configurações",
 });
 
 registry.registerIntegration("Renderizador PDF", {
