@@ -1,15 +1,17 @@
 const { model } = require("../lib/model");
 const { processEventById, processInvoiceById } = require("../services/faturaProcessor");
+const { getCentralConfiguration } = require("../services/configurationService");
 const log = require("../lib/log");
 
 let running = false;
 
-async function tick() {
-  if (running || process.env.PROCESSOR_ENABLED === "false") return;
+async function tick(configurationOverride) {
+  const configuration = configurationOverride || (await getCentralConfiguration());
+  if (running || !configuration.processorEnabled) return configuration;
   running = true;
   try {
     const now = new Date();
-    const batch = Number(process.env.PROCESSOR_BATCH_SIZE || 10);
+    const batch = Number(configuration.processorBatchSize || 10);
     const Evento = model("EventoWebhook");
     const Fatura = model("Fatura");
     const events = await Evento.find({
@@ -39,13 +41,24 @@ async function tick() {
   } finally {
     running = false;
   }
+  return configuration;
 }
 
-if (process.env.PROCESSOR_ENABLED !== "false") {
-  const initial = setTimeout(tick, 2500);
-  initial.unref?.();
-  const interval = setInterval(tick, Number(process.env.PROCESSOR_POLL_INTERVAL_MS || 5000));
-  interval.unref?.();
+async function scheduleNext() {
+  let interval = 5000;
+  try {
+    const configuration = await getCentralConfiguration();
+    interval = Number(configuration.processorPollIntervalMs || 5000);
+    await tick(configuration);
+  } catch (error) {
+    log.error("Não foi possível carregar a configuração do worker", { error: { message: error.message, code: error.code } });
+  } finally {
+    const timer = setTimeout(scheduleNext, interval);
+    timer.unref?.();
+  }
 }
+
+const initial = setTimeout(scheduleNext, 2500);
+initial.unref?.();
 
 module.exports = { tick };
