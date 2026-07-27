@@ -19,6 +19,10 @@ for (const file of files) {
     console.error(result.stderr || result.stdout);
     process.exit(result.status || 1);
   }
+  const content = fs.readFileSync(file, "utf8");
+  if (/\b(secretRef|webhookTokenRef|emailProviderSecretRef)\b/.test(content)) {
+    throw new Error(`Referência legada de segredo encontrada em ${path.relative(root, file)}.`);
+  }
 }
 JSON.parse(fs.readFileSync(path.join(root, "central.manifest.json"), "utf8"));
 console.log(`OK: ${files.length} arquivos JavaScript e central.manifest.json validados.`);
