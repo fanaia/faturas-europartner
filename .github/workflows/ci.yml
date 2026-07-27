@@ -36,7 +36,27 @@ jobs:
           node-version: 20
       - name: Install frontend dependencies
         run: npm install --prefix frontend --ignore-scripts --no-audit --no-fund --loglevel=error
-      - name: Frontend static checks and typecheck
+      - name: Frontend manifest checks
         run: npm run check --prefix frontend
+      - name: Frontend typecheck
+        id: typecheck
+        shell: bash
+        run: |
+          set +e
+          npm run typecheck --prefix frontend > frontend-typecheck.log 2>&1
+          code=$?
+          cat frontend-typecheck.log
+          echo "exit_code=$code" >> "$GITHUB_OUTPUT"
+          exit 0
+      - name: Upload typecheck output
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-typecheck-log
+          path: frontend-typecheck.log
+          if-no-files-found: error
+      - name: Fail on typecheck errors
+        if: steps.typecheck.outputs.exit_code != '0'
+        run: exit 1
       - name: Frontend build
         run: npm run build --prefix frontend
