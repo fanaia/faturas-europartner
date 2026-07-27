@@ -5,7 +5,7 @@ function normalizePattern(value) {
   return value.toLowerCase().trim();
 }
 
-function selectAttachments(attachments, profile, maxBytes = Number(process.env.EMAIL_MAX_ATTACHMENTS_BYTES || 20_000_000)) {
+function selectAttachments(attachments, profile, maxBytes = 20000000) {
   if (profile.politicaAnexos === "somente_fatura") return [];
   if (profile.politicaAnexos === "selecao_manual") {
     throw new Error("Seleção manual de anexos não é compatível com o processamento automático.");
