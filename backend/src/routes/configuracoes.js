@@ -22,7 +22,7 @@ defineRoutes("/api/configuracoes-central", (router) => {
     "/",
     { roles, audit: { action: "configuracao-central.atualizar" } },
     async (req, res) => {
-      const configuration = await saveCentralConfiguration(req.body || {}, req.user);
+      const configuration = await saveCentralConfiguration(req.body || {}, req.usuario || req.user);
       const companies = await listCompanyConfigurations();
       res.json({ message: "Configurações atualizadas.", configuration, companies });
     }
