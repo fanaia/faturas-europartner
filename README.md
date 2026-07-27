@@ -2,11 +2,13 @@
 
 Central Oon exclusiva para a Europartner, construída sobre o `oonCore` a partir do artefato `fatura-europartner.central.blueprint.json`.
 
-## Manual de configuração
+## Manual do usuário
 
-O roteiro completo de ambiente, empresas Omie, segredos, modelos, perfis, webhooks, homologação e entrada em produção está em:
+O manual parte da Central já publicada e ativada e orienta o consultor ou usuário administrador na configuração pela interface:
 
-- [Manual de Configuração da Central Faturas Europartner](docs/MANUAL_CONFIGURACAO.md)
+- [Manual do Usuário — Configuração e Operação](docs/MANUAL_CONFIGURACAO.md)
+
+Credenciais Omie, tokens de webhook, chave única do SendGrid, URLs de integração, timeouts, limites e parâmetros de processamento são cadastrados no menu **Configurações**. Não é necessário editar arquivos, variáveis de ambiente ou código para configurar a operação.
 
 ## Fluxo operacional
 
@@ -18,21 +20,36 @@ O roteiro completo de ambiente, empresas Omie, segredos, modelos, perfis, webhoo
 6. O PDF é gerado, anexado à OS, enviado por e-mail, aplicado o adiantamento e atualizada a etapa da OS.
 7. Cada efeito possui execução própria, chave de idempotência, retry e auditoria operacional.
 
-## Estrutura
+## Configuração pós-publicação
 
-- `backend/`: domínio, validações, rotas, worker e conectores.
-- `frontend/`: manifesto declarativo do OonCore Front.
+A configuração funcional é realizada nesta ordem:
+
+1. abrir **Configurações** e revisar URLs, SendGrid e parâmetros operacionais;
+2. cadastrar as Empresas Omie;
+3. cadastrar, pela página **Configurações**, App Key, App Secret e token de webhook de cada empresa;
+4. testar a conexão;
+5. criar e publicar os modelos de documento;
+6. criar os perfis de faturamento;
+7. configurar os webhooks no Omie;
+8. homologar uma OS antes de ativar o processamento produtivo.
+
+A Central utiliza apenas uma conta SendGrid. Os remetentes e cópias podem continuar sendo definidos por Empresa Omie e por perfil de faturamento.
+
+## Segurança dos segredos
+
+Os campos secretos são enviados por uma rota administrativa, armazenados de forma criptografada e nunca retornam em texto aberto. Depois de salvos, a interface apresenta somente o estado de configuração e valores mascarados. Um token de webhook gerado pela Central é exibido apenas no momento da geração para que seja copiado para o Omie.
+
+## Estrutura técnica
+
+- `backend/`: domínio, validações, rotas, worker e conectores;
+- `frontend/`: manifesto declarativo e página de configurações;
 - `fatura-europartner.central.blueprint.json`: fonte de verdade funcional e arquitetural.
 
-## Desenvolvimento
+## Desenvolvimento local
 
 ```bash
 npm install
 npm run ooncore:docs
-
-cp backend/.env.example backend/.env
-cp frontend/.env.example frontend/.env
-
 npm run dev:backend
 npm run dev:frontend
 ```
@@ -43,52 +60,3 @@ npm run dev:frontend
 npm test
 npm run check
 ```
-
-## Segredos
-
-Credenciais não são persistidas nas coleções. `EmpresaOmie.secretRef`, `webhookTokenRef` e `emailProviderSecretRef` guardam apenas o nome de uma variável de ambiente.
-
-Exemplo:
-
-```env
-OMIE_EUROPARTNER_BRASIL={"appKey":"...","appSecret":"..."}
-WEBHOOK_EUROPARTNER_BRASIL=token-forte
-SENDGRID_API_KEY=SG.xxx
-```
-
-## Estado do MVP
-
-A base técnica e funcional está implementada. Antes da ativação produtiva ainda é necessário cadastrar as sete empresas, perfis, etapas Omie, modelos homologados, remetentes e referências de segredos descritos nas questões abertas do blueprint.
-
-## Ativação inicial
-
-Após instalar as dependências e configurar o MongoDB, execute:
-
-```bash
-npm run activate --prefix backend
-```
-
-A ativação cria apenas o modelo seguro `invoice-padrao` em rascunho. Empresas, credenciais, etapas e perfis não recebem valores fictícios e precisam ser configurados com os dados homologados da Europartner.
-
-## Webhook Omie
-
-Cada empresa usa um endpoint e token próprios:
-
-```text
-POST /api/integrations/omie/webhooks/ordem-servico/{codigoInterno}
-X-Webhook-Token: <token configurado em webhookTokenRef>
-```
-
-O endpoint responde `202` depois de persistir e deduplicar o evento. O processamento externo é executado pelo worker configurado por `PROCESSOR_*`.
-
-## Modelos seguros
-
-O motor `template-seguro` aceita variáveis declaradas e os blocos controlados:
-
-```html
-{{cliente.razao_social}}
-{{#if cliente.pais}}{{cliente.pais}}{{/if}}
-{{#each servicos}}{{this.cDescricao}}{{/each}}
-```
-
-Não há execução de JavaScript ou EJS. A publicação ocorre pela ação **Publicar**, registra hash, usuário e data, substitui a versão anterior do mesmo idioma e torna o conteúdo imutável.
