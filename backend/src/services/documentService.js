@@ -1,6 +1,7 @@
 const sanitizeHtml = require("sanitize-html");
 const puppeteer = require("puppeteer");
 const { render, parseAllowed } = require("./templateEngine");
+const { getCentralConfiguration } = require("./configurationService");
 const { sha256 } = require("../lib/hash");
 const { OperationalError } = require("../lib/error");
 
@@ -39,11 +40,15 @@ function composeHtml(version, variables, { strict = true, watermark } = {}) {
 }
 
 async function renderPdf(version, variables, options = {}) {
+  const [configuration] = await Promise.all([getCentralConfiguration()]);
   const html = composeHtml(version, variables, options);
   const browser = await puppeteer.launch({ headless: true, args: ["--no-sandbox", "--disable-setuid-sandbox"] });
   try {
     const page = await browser.newPage();
-    await page.setContent(html, { waitUntil: "networkidle0", timeout: Number(process.env.PDF_RENDER_TIMEOUT_MS || 30_000) });
+    await page.setContent(html, {
+      waitUntil: "networkidle0",
+      timeout: Number(configuration.pdfRenderTimeoutMs || 30000),
+    });
     const pdf = Buffer.from(await page.pdf({ format: "A4", printBackground: true, margin: { top: "14mm", right: "12mm", bottom: "14mm", left: "12mm" } }));
     return { pdf, hash: sha256(pdf), htmlHash: sha256(html) };
   } finally {
