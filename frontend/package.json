@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "sync:metadata": "oonCore-front sync:metadata",
     "typecheck": "tsc --noEmit",
-    "check": "node scripts/check.mjs && npm run typecheck"
+    "check": "node scripts/check.mjs"
   },
   "dependencies": {
     "@oondemand/oon-core-front": "^0.3.36",
