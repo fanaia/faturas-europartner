@@ -30,7 +30,7 @@ function decryptWithKey(value, keyBuffer) {
 
 async function getEncryptionKey() {
   const Configuracao = model("ConfiguracaoCentral");
-  let config = await Configuracao.findOneAndUpdate(
+  const config = await Configuracao.findOneAndUpdate(
     { codigo: "principal" },
     {
       $setOnInsert: {
@@ -78,4 +78,11 @@ function maskSecret(value, visible = 4) {
   return `${"*".repeat(Math.max(8, text.length - visible))}${text.slice(-visible)}`;
 }
 
-module.exports = { encryptWithKey, decryptWithKey, encryptSecret, decryptSecret, maskSecret };
+module.exports = {
+  encryptWithKey,
+  decryptWithKey,
+  getEncryptionKey,
+  encryptSecret,
+  decryptSecret,
+  maskSecret,
+};
