@@ -1,676 +1,478 @@
-# Manual de Configuração — Central Faturas Europartner
+# Manual do Usuário — Central Faturas Europartner
 
-**Versão do documento:** 1.0  
-**Escopo:** configuração técnica, cadastros funcionais, integração Omie, modelos de fatura, e-mail, cotação, adiantamento e homologação do MVP.
+**Versão:** 2.0  
+**Público:** consultores, administradores e usuários responsáveis pela implantação e operação.  
+**Ponto de partida:** Central publicada, ativada e acessível pelo navegador.
 
-> Este manual descreve a configuração disponível na versão atual da Central. Credenciais, códigos de clientes, etapas, contas, categorias e modelos devem ser homologados com a Europartner antes da ativação em produção.
+> Toda a configuração da operação é realizada pela interface. O usuário não precisa acessar servidor, código, arquivo `.env`, banco de dados ou ambiente de desenvolvimento.
 
 ---
 
 ## 1. Objetivo da Central
 
-A Central Faturas Europartner processa automaticamente uma Ordem de Serviço quando o Omie informa a alteração para uma etapa configurada.
+A Central Faturas Europartner automatiza o processamento de faturas a partir da mudança de etapa de uma Ordem de Serviço no Omie.
 
-Fluxo resumido:
+O fluxo executado é:
 
-1. o Omie envia o evento `OrdemServico.EtapaAlterada`;
-2. a Central autentica, sanitiza, persiste e deduplica o evento;
-3. o worker consulta a OS, o cliente e o país no Omie;
-4. a Central localiza o perfil de faturamento vigente;
-5. resolve a versão publicada do modelo e a cotação aplicável;
-6. gera o PDF da fatura;
-7. anexa o PDF na OS;
-8. envia o e-mail;
-9. gera o adiantamento, quando habilitado;
-10. altera a etapa da OS após concluir os efeitos obrigatórios.
+1. o Omie envia o evento de alteração da etapa da OS;
+2. a Central identifica a Empresa Omie e valida o token do webhook;
+3. consulta a OS, o cliente e o país;
+4. encontra o perfil de faturamento vigente para a empresa, cliente e etapa;
+5. seleciona o modelo publicado e a moeda do perfil;
+6. consulta a PTAX quando a moeda for USD ou EUR;
+7. gera o PDF da fatura;
+8. anexa o PDF na OS do Omie;
+9. envia o e-mail pelo SendGrid;
+10. gera o adiantamento, quando habilitado;
+11. altera a OS para a etapa de sucesso.
 
-Cada efeito possui execução independente, auditoria, tentativas e retomada sem repetir automaticamente os efeitos já concluídos.
-
----
-
-## 2. Ordem recomendada de configuração
-
-Execute a configuração nesta ordem:
-
-1. preparar Node.js, MongoDB e dependências;
-2. criar os arquivos `.env` do backend e do frontend;
-3. iniciar backend e frontend;
-4. executar a ativação inicial;
-5. cadastrar os segredos no ambiente;
-6. cadastrar as Empresas Omie;
-7. testar as credenciais;
-8. cadastrar e publicar os modelos de documento;
-9. cadastrar os perfis de faturamento;
-10. configurar os webhooks no Omie;
-11. homologar uma OS por empresa e moeda;
-12. ativar o processamento produtivo.
-
-Não configure o webhook produtivo antes de existir uma empresa, um modelo publicado e exatamente um perfil ativo compatível com o cliente e a etapa.
+Cada etapa é registrada separadamente. Em caso de falha, a Central permite retomar somente o efeito necessário, evitando duplicar anexos, e-mails ou adiantamentos.
 
 ---
 
-# Parte I — Configuração técnica
-
-## 3. Pré-requisitos
-
-### 3.1 Software
-
-- Node.js 20 ou superior;
-- npm 10 ou superior;
-- MongoDB acessível pela Central;
-- Git;
-- acesso aos pacotes `@oondemand` no npm;
-- acesso à API do Omie;
-- conta e chave do SendGrid para envio de e-mails;
-- acesso externo HTTPS ao backend para receber webhooks em produção.
-
-Para conferir as versões:
-
-```powershell
-node --version
-npm --version
-git --version
-```
-
-### 3.2 Portas locais padrão
-
-| Serviço | Porta |
-|---|---:|
-| Backend | 4000 |
-| Frontend | 5173 |
-| MongoDB local | 27017 |
-
----
-
-## 4. Instalação local
-
-Na raiz do repositório:
-
-```powershell
-git checkout agent/implementar-central-faturas-europartner
-git pull origin agent/implementar-central-faturas-europartner
-
-npm install
-npm install --prefix backend
-npm install --prefix frontend
-```
-
-Crie os arquivos de ambiente:
-
-```powershell
-Copy-Item backend\.env.example backend\.env
-Copy-Item frontend\.env.example frontend\.env
-```
-
-Valide o projeto:
-
-```powershell
-npm run check
-npm test
-npm run build --prefix frontend
-```
-
----
-
-## 5. Configuração do backend
-
-Arquivo:
-
-```text
-backend/.env
-```
-
-### 5.1 Identidade e execução
-
-```env
-SERVICE_NAME=faturas-europartner
-SERVICE_VERSION=0.1.0
-PORT=4000
-NODE_ENV=development
-```
-
-Em produção, use:
-
-```env
-NODE_ENV=production
-```
-
-### 5.2 MongoDB
-
-Ambiente local:
-
-```env
-MONGO_URI=mongodb://localhost:27017/faturas-europartner
-```
-
-Produção, exemplo conceitual:
-
-```env
-MONGO_URI=mongodb+srv://USUARIO:SENHA@CLUSTER/faturas-europartner
-```
-
-Não versione a URI real. Armazene-a no provedor de segredos do ambiente.
-
-### 5.3 Ecossistema e ativação
-
-```env
-CENTRAL_ATIVACAO_URL=https://central-ativacao.central.oondemand.online
-CENTRAL_ATIVACAO_API_URL=https://central-ativacao.central.oondemand.online/api/
-APP_CODE=faturas-europartner
-APP_ENVIRONMENT=desenvolvimento
-PUBLIC_APP_URL=http://localhost:5173
-AUTH_PROVIDER_TIMEOUT_MS=10000
-INSTANCE_CREDENTIAL_ENCRYPTION_KEY=
-```
-
-Em produção:
-
-- ajuste `APP_ENVIRONMENT` para o ambiente publicado;
-- ajuste `PUBLIC_APP_URL` para a URL pública do frontend;
-- configure `INSTANCE_CREDENTIAL_ENCRYPTION_KEY` com uma chave forte fornecida pelo ambiente;
-- não reutilize chaves entre ambientes.
-
-### 5.4 Autenticação local
-
-Para desenvolvimento:
-
-```env
-DEV_TOKEN=dev-local
-```
-
-O usuário local é tratado como administrador apenas quando:
-
-```env
-NODE_ENV=development
-```
-
-Em produção, não configure `DEV_TOKEN`. A autenticação deve ser fornecida pelo ecossistema Oon.
-
-### 5.5 Integrações externas
-
-```env
-OMIE_API_URL=https://app.omie.com.br/api/v1/
-BACEN_PTAX_URL=https://olinda.bcb.gov.br/olinda/servico/PTAX/versao/v1/odata
-SENDGRID_API_KEY=SG.SUBSTITUIR
-```
-
-`SENDGRID_API_KEY` é o segredo padrão de envio. Também é possível configurar uma referência diferente em cada Empresa Omie.
-
-### 5.6 Worker e tentativas
-
-```env
-PROCESSOR_ENABLED=true
-PROCESSOR_POLL_INTERVAL_MS=5000
-PROCESSOR_BATCH_SIZE=10
-PROCESSOR_LOCK_MS=300000
-PROCESSOR_MAX_ATTEMPTS=5
-PROCESSOR_RETRY_BASE_MS=30000
-INSTANCE_ID=local-dev
-```
-
-Descrição:
-
-| Variável | Função |
-|---|---|
-| `PROCESSOR_ENABLED` | Liga ou desliga o processamento automático. |
-| `PROCESSOR_POLL_INTERVAL_MS` | Intervalo de busca por trabalhos pendentes. |
-| `PROCESSOR_BATCH_SIZE` | Quantidade máxima processada por ciclo. |
-| `PROCESSOR_LOCK_MS` | Tempo de bloqueio de uma execução em processamento. |
-| `PROCESSOR_MAX_ATTEMPTS` | Máximo de tentativas automáticas. |
-| `PROCESSOR_RETRY_BASE_MS` | Base do backoff entre tentativas. |
-| `INSTANCE_ID` | Identifica a instância do worker. Deve ser única quando houver mais de uma réplica. |
-
-Durante a configuração inicial, pode-se usar:
-
-```env
-PROCESSOR_ENABLED=false
-```
-
-Ative o worker somente depois de concluir empresas, modelos, perfis e webhooks.
-
-### 5.7 Segurança e limites
-
-```env
-WEBHOOK_RATE_LIMIT_PER_MINUTE=120
-PDF_RENDER_TIMEOUT_MS=30000
-EMAIL_MAX_ATTACHMENTS_BYTES=20000000
-BACEN_MAX_LOOKBACK_DAYS=30
-LOG_LEVEL=info
-```
-
-- `WEBHOOK_RATE_LIMIT_PER_MINUTE`: limite por código de empresa;
-- `PDF_RENDER_TIMEOUT_MS`: tempo máximo para renderizar o PDF;
-- `EMAIL_MAX_ATTACHMENTS_BYTES`: soma máxima dos anexos do e-mail;
-- `BACEN_MAX_LOOKBACK_DAYS`: quantidade máxima de dias anteriores pesquisados quando não há PTAX na data solicitada;
-- `LOG_LEVEL`: nível de detalhe dos logs.
-
----
-
-## 6. Configuração do frontend
-
-Arquivo:
-
-```text
-frontend/.env
-```
-
-Ambiente local:
-
-```env
-VITE_API_URL=http://localhost:4000
-VITE_DEV_TOKEN=dev-local
-```
-
-Produção:
-
-```env
-VITE_API_URL=https://URL-PUBLICA-DO-BACKEND
-```
-
-Não configure `VITE_DEV_TOKEN` em produção.
-
-Quando aplicável, configure a URL do portal de aplicações:
-
-```env
-VITE_MEUS_APPS_URL=https://URL-DO-PORTAL
-```
-
----
-
-## 7. Inicialização
-
-Abra dois terminais.
-
-### Terminal 1 — backend
-
-```powershell
-cd backend
-npm run start
-```
-
-Durante desenvolvimento, também é possível usar:
-
-```powershell
-npm run dev
-```
-
-### Terminal 2 — frontend
-
-```powershell
-cd frontend
-npm run dev
-```
-
-Acesse:
-
-```text
-http://localhost:5173
-```
-
----
-
-## 8. Ativação inicial
-
-Com o MongoDB e o backend configurados:
-
-```powershell
-npm run activate --prefix backend
-```
-
-A ativação cria:
-
-- o modelo `invoice-padrao`;
-- a versão `1.0.0`, em português;
-- conteúdo HTML e CSS iniciais;
-- status da versão como `rascunho`.
-
-A ativação não cria empresas, credenciais, perfis, códigos Omie, etapas ou remetentes fictícios.
-
-A operação é idempotente: uma nova execução não deve duplicar o modelo inicial existente.
-
----
-
-# Parte II — Segredos e credenciais
-
-## 9. Conceito de referência de segredo
-
-A Central não guarda `appSecret`, token de webhook ou chave de e-mail nos cadastros.
-
-Os campos de referência armazenam apenas o nome de uma variável de ambiente, por exemplo:
-
-```text
-OMIE_EUROPARTNER_BRASIL
-WEBHOOK_EUROPARTNER_BRASIL
-SENDGRID_API_KEY
-```
-
-Uma referência válida:
-
-- começa com letra maiúscula;
-- usa somente letras maiúsculas, números e `_`;
-- possui pelo menos três caracteres.
-
-Não use:
-
-```text
-omie-europartner-brasil
-MinhaChave
-SG.xxxxx
-```
-
-O último exemplo é o valor do segredo, e não o nome da variável.
-
----
-
-## 10. Credencial Omie por empresa
-
-Crie uma variável por base/CNPJ:
-
-```env
-OMIE_EUROPARTNER_BRASIL={"appKey":"APP_KEY_REAL","appSecret":"APP_SECRET_REAL"}
-```
-
-Também são aceitas as chaves `app_key` e `app_secret`, mas o padrão recomendado é:
-
-```json
-{
-  "appKey": "...",
-  "appSecret": "..."
-}
-```
-
-O conteúdo precisa ser JSON válido em uma única variável de ambiente.
-
-Exemplos para múltiplas empresas:
-
-```env
-OMIE_EUROPARTNER_BRASIL={"appKey":"...","appSecret":"..."}
-OMIE_EUROPARTNER_EUA={"appKey":"...","appSecret":"..."}
-OMIE_EUROPARTNER_EUROPA={"appKey":"...","appSecret":"..."}
-```
-
----
-
-## 11. Token de webhook por empresa
-
-Crie um token forte e diferente para cada empresa:
-
-```env
-WEBHOOK_EUROPARTNER_BRASIL=TOKEN_LONGO_ALEATORIO
-```
-
-Recomendações:
-
-- mínimo de 32 caracteres aleatórios;
-- não usar appKey ou appSecret como token;
-- não reutilizar entre empresas;
-- rotacionar em caso de suspeita de exposição.
-
-O token pode chegar ao webhook por:
-
-```http
-X-Webhook-Token: TOKEN
-```
-
-ou:
-
-```http
-Authorization: Bearer TOKEN
-```
-
----
-
-## 12. Chave de e-mail
-
-Padrão global:
-
-```env
-SENDGRID_API_KEY=SG.CHAVE_REAL
-```
-
-No cadastro da Empresa Omie, o campo **Referência do Segredo de E-mail** deve conter:
-
-```text
-SENDGRID_API_KEY
-```
-
-Pode-se usar uma chave diferente por empresa:
-
-```env
-SENDGRID_EUROPARTNER_BRASIL=SG.CHAVE_REAL
-```
-
-Nesse caso, cadastre `SENDGRID_EUROPARTNER_BRASIL` na empresa correspondente.
-
----
-
-# Parte III — Configuração funcional
-
-## 13. Perfis e permissões
+## 2. Perfis de acesso
 
 ### Administrador
 
 Pode:
 
+- acessar a página **Configurações**;
 - cadastrar Empresas Omie;
-- testar configuração;
-- cadastrar modelos e versões;
-- publicar modelos;
-- cadastrar perfis;
-- reprocessar faturas, eventos e adiantamentos;
-- acompanhar toda a operação.
+- informar credenciais e tokens;
+- configurar URLs e parâmetros operacionais;
+- criar, publicar e substituir modelos;
+- cadastrar perfis de faturamento;
+- testar conexões e reprocessar operações.
 
 ### Gestor de faturamento
 
-Pode:
-
-- manter modelos e versões;
-- publicar versões;
-- manter perfis de faturamento;
-- acompanhar e reprocessar a operação.
+Pode operar faturas, perfis e modelos conforme as permissões concedidas, mas não altera os segredos gerais da Central.
 
 ### Operação de faturamento
 
-Pode:
-
-- acompanhar faturas, eventos e integrações;
-- manter perfis, conforme RBAC atual;
-- reprocessar eventos e fluxos autorizados;
-- não pode testar credenciais da empresa nem publicar versões.
+Pode acompanhar e reprocessar faturas e eventos permitidos, sem acesso às credenciais.
 
 ---
 
-## 14. Cadastro de Empresas Omie
+## 3. Ordem recomendada da configuração
 
-Menu:
+Faça a implantação nesta sequência:
+
+1. revisar as configurações gerais;
+2. cadastrar a chave única do SendGrid;
+3. cadastrar as Empresas Omie;
+4. cadastrar as credenciais Omie e os tokens de webhook;
+5. testar a conexão de cada empresa;
+6. criar ou revisar os modelos de documento;
+7. publicar uma versão por idioma utilizado;
+8. cadastrar os perfis de faturamento;
+9. copiar a URL e o token do webhook para o Omie;
+10. homologar uma OS completa;
+11. habilitar o processamento automático;
+12. repetir a homologação para as demais empresas, clientes e moedas.
+
+Durante a implantação inicial, mantenha as empresas com status **Homologação** e o processamento automático desabilitado até concluir os cadastros mínimos.
+
+---
+
+# Parte I — Configurações gerais
+
+## 4. Acessar a página Configurações
+
+No menu lateral, abra:
+
+**Configurações > Configurações**
+
+A página é dividida em:
+
+- URLs e integrações;
+- SendGrid;
+- processamento e limites;
+- credenciais das Empresas Omie.
+
+Somente usuários administradores podem alterar essa página.
+
+---
+
+## 5. URLs e integrações
+
+### URL pública do backend
+
+Informe o endereço público do backend da Central publicado pela OonDemand.
+
+Exemplo:
 
 ```text
-Configurações > Empresas Omie
+https://faturas-europartner.central.oondemand.online
 ```
 
-Comece sempre com o status **Homologação**.
+Essa URL é utilizada para montar automaticamente o endereço do webhook de cada Empresa Omie.
 
-### 14.1 Campos
+Não inclua o caminho do webhook e não finalize com parâmetros adicionais.
 
-| Campo | Obrigatório | Orientação |
-|---|---:|---|
-| Nome | Sim | Nome curto apresentado na Central. Ex.: `Europartner Brasil`. |
-| Razão Social | Sim | Razão social oficial do CNPJ. |
-| CNPJ | Sim | CNPJ válido e exclusivo. |
-| Código Interno | Sim | Identificador exclusivo em kebab-case. Ex.: `europartner-brasil`. |
-| App Key | Não preencher manualmente | É mascarada e atualizada pelo teste de configuração. |
-| Referência do Segredo Omie | Sim | Nome da variável com o JSON `appKey/appSecret`. |
-| Referência do Token do Webhook | Sim | Nome da variável com o token do webhook. |
-| Referência do Segredo de E-mail | Não | Padrão: `SENDGRID_API_KEY`. |
-| Etapa de Entrada | Sim | Etapa padrão que dispara o processamento. |
-| Etapa de Sucesso | Sim | Etapa aplicada após conclusão. |
-| Etapa de Erro | Sim | Etapa usada conforme a política operacional de erro. |
-| Categoria de Adiantamento | Condicional | Necessária quando o perfil gera adiantamento. |
-| Conta Corrente de Adiantamento | Condicional | Necessária quando o perfil gera adiantamento. |
-| E-mail Remetente | Sim | Remetente autorizado no SendGrid. |
-| Nome do Remetente | Sim | Nome exibido no e-mail. |
-| Cópias Padrão | Não | E-mails separados por vírgula, ponto e vírgula ou nova linha. |
-| Status | Sim | `homologacao`, `ativa`, `inativa` ou `arquivada`. |
+### URL da API Omie
 
-### 14.2 Código interno
+Valor padrão:
 
-O código interno precisa estar em kebab-case:
+```text
+https://app.omie.com.br/api/v1/
+```
+
+Altere somente quando a OonDemand ou o Omie orientar o uso de outro endpoint.
+
+### Timeout Omie
+
+Tempo máximo de espera por uma resposta da API do Omie.
+
+Valor inicial recomendado:
+
+```text
+20000 ms
+```
+
+### URL PTAX BACEN
+
+Valor padrão:
+
+```text
+https://olinda.bcb.gov.br/olinda/servico/PTAX/versao/v1/odata
+```
+
+É utilizada para consultar o Fechamento PTAX das moedas USD e EUR.
+
+### Timeout BACEN
+
+Valor inicial recomendado:
+
+```text
+15000 ms
+```
+
+### Busca retroativa PTAX
+
+Quantidade máxima de dias anteriores que a Central pesquisará quando não houver Fechamento PTAX na data solicitada, como finais de semana e feriados.
+
+Valor inicial recomendado:
+
+```text
+30 dias
+```
+
+Depois de revisar os campos, clique em **Salvar configurações gerais**.
+
+---
+
+## 6. Configurar o SendGrid
+
+A Central utiliza **uma única conta SendGrid** para todas as Empresas Omie.
+
+No bloco **SendGrid**:
+
+1. informe a API Key;
+2. confirme que a chave começa com `SG.`;
+3. clique em **Salvar configurações gerais**;
+4. verifique se o indicador passou para **SendGrid: configurado**.
+
+Depois de salva:
+
+- a chave não é exibida novamente;
+- a interface mostra apenas uma versão mascarada;
+- deixar o campo em branco mantém a chave atual;
+- informar uma nova chave substitui a anterior.
+
+Os remetentes não precisam ser iguais para todas as empresas. O endereço e o nome do remetente são cadastrados em cada **Empresa Omie**, mas todos os envios usam a mesma conta SendGrid.
+
+Antes da homologação, confirme no SendGrid que os remetentes utilizados estão autorizados.
+
+---
+
+## 7. Processamento e limites
+
+### Processamento automático habilitado
+
+Quando marcado, o worker pesquisa eventos e faturas pendentes automaticamente.
+
+Recomendação:
+
+- **desmarcado** durante a configuração inicial;
+- **marcado** depois da homologação do fluxo completo.
+
+### Intervalo do worker
+
+Tempo entre as verificações automáticas.
+
+Valor inicial recomendado:
+
+```text
+5000 ms
+```
+
+### Tamanho do lote
+
+Quantidade máxima de eventos e faturas processados em cada ciclo.
+
+Valor inicial recomendado:
+
+```text
+10
+```
+
+### Tempo de lock
+
+Prazo durante o qual um processamento fica reservado para uma instância da Central, evitando execução concorrente.
+
+Valor inicial recomendado:
+
+```text
+300000 ms
+```
+
+### Máximo de tentativas
+
+Quantidade máxima de tentativas automáticas para falhas transitórias.
+
+Valor inicial recomendado:
+
+```text
+5
+```
+
+### Base de retry
+
+Intervalo inicial usado no cálculo das novas tentativas. O tempo aumenta progressivamente em falhas consecutivas.
+
+Valor inicial recomendado:
+
+```text
+30000 ms
+```
+
+### Webhooks por minuto
+
+Limite de eventos aceitos por Empresa Omie em um minuto.
+
+Valor inicial recomendado:
+
+```text
+120
+```
+
+### Timeout do PDF
+
+Tempo máximo para renderizar o documento.
+
+Valor inicial recomendado:
+
+```text
+30000 ms
+```
+
+### Limite de anexos
+
+Tamanho total máximo dos anexos adicionais enviados por e-mail.
+
+Valor inicial recomendado:
+
+```text
+20000000 bytes
+```
+
+Depois de alterar qualquer parâmetro, clique em **Salvar configurações gerais**.
+
+---
+
+# Parte II — Empresas Omie
+
+## 8. Cadastrar uma Empresa Omie
+
+Abra:
+
+**Configurações > Empresas Omie**
+
+Cadastre uma empresa para cada base do Omie utilizada pela Europartner.
+
+### Campos principais
+
+| Campo | Orientação |
+|---|---|
+| Nome | Nome curto exibido na Central |
+| Razão Social | Razão social da empresa |
+| CNPJ | CNPJ válido e exclusivo |
+| Código Interno | Identificador em letras minúsculas e hífens, por exemplo `europartner-brasil` |
+| Etapa de Entrada | Etapa padrão do Omie que inicia o faturamento |
+| Etapa de Sucesso | Etapa aplicada após a conclusão |
+| Etapa de Erro | Etapa prevista para tratamento de falhas, quando utilizada |
+| Categoria de Adiantamento | Código da categoria usada no Omie |
+| Conta Corrente de Adiantamento | Código da conta corrente usada no Omie |
+| E-mail Remetente | Remetente autorizado no SendGrid |
+| Nome do Remetente | Nome apresentado ao destinatário |
+| Cópias Padrão | E-mails copiados em todos os envios dessa empresa |
+| Status | Use Homologação durante os testes e Ativa após a aprovação |
+
+O campo **Código Interno** fará parte da URL do webhook. Evite acentos, espaços, barras e caracteres especiais.
+
+Exemplos válidos:
 
 ```text
 europartner-brasil
-europartner-miami
-europartner-espanha
+europartner-argentina
+europartner-mexico
 ```
-
-Não use espaços, `_`, letras maiúsculas ou acentos.
-
-Esse código compõe a URL pública do webhook e não deve ser alterado depois de configurado no Omie sem atualizar o webhook.
-
-### 14.3 Etapas do Omie
-
-Cadastre o valor exato recebido no evento do Omie.
-
-O perfil pode substituir as etapas padrão da empresa. Quando o perfil não informa uma etapa específica, são usados os valores da Empresa Omie.
-
-Registre para cada empresa:
-
-| Finalidade | Valor homologado |
-|---|---|
-| Entrada | A confirmar |
-| Sucesso | A confirmar |
-| Erro | A confirmar |
-
-### 14.4 Status
-
-- `homologacao`: aceita webhooks, mas indica que a base ainda está em testes;
-- `ativa`: operação produtiva;
-- `inativa`: webhooks são recusados;
-- `arquivada`: registro histórico fora de uso.
 
 ---
 
-## 15. Teste da Empresa Omie
+## 9. Informar as credenciais Omie
 
-Na listagem de empresas, use:
+Depois de salvar a Empresa Omie, volte para:
 
-```text
-Testar configuração
-```
+**Configurações > Configurações**
 
-O teste padrão valida:
+No bloco **Credenciais das Empresas Omie**, localize a empresa e informe:
 
-- existência da variável de ambiente informada em `secretRef`;
-- JSON válido;
-- presença de `appKey` e `appSecret`;
-- gravação mascarada da appKey;
-- atualização de data e erro de comunicação.
+- App Key;
+- App Secret;
+- token do webhook.
 
-Para testar também uma consulta real de OS, a API aceita `codigoOS`:
+### Gerar o token do webhook
 
-```http
-POST /api/empresas-omie/{ID_DA_EMPRESA}/testar-conexao
-Authorization: Bearer TOKEN_DE_USUARIO
-Content-Type: application/json
+Para gerar um token seguro:
 
-{
-  "codigoOS": "CODIGO_INTERNO_DA_OS"
-}
-```
+1. clique em **Gerar novo token**;
+2. copie o token exibido;
+3. guarde-o temporariamente para configurar o webhook no Omie;
+4. informe App Key e App Secret;
+5. clique em **Salvar credenciais**.
 
-Após o teste, confira:
+O token gerado é exibido apenas durante a sessão atual. Depois de sair ou atualizar a página, a Central mostrará somente que o token está configurado.
 
-- **App Key** mascarada;
-- **Última Comunicação** preenchida;
-- **Último Erro** vazio.
+Gerar um novo token invalida o token anterior. Depois da troca, atualize imediatamente o webhook no Omie.
 
----
+### Atualizar uma credencial
 
-## 16. Modelos de documento
+- deixe o campo em branco para manter o valor atual;
+- informe um novo valor para substituir somente aquela credencial;
+- clique em **Salvar credenciais**.
 
-Menu:
-
-```text
-Documentos > Modelos
-```
-
-Um modelo representa uma família de documentos, como:
-
-- Invoice padrão BRL;
-- Invoice internacional USD;
-- Invoice internacional EUR;
-- Invoice específica de cliente.
-
-### Campos
-
-| Campo | Orientação |
-|---|---|
-| Código | Identificador único em formato estável. Ex.: `invoice-internacional`. |
-| Nome | Nome funcional. |
-| Descrição | Finalidade e clientes atendidos. |
-| Idiomas Suportados | Lista como `pt-BR,en-US,es-ES`. |
-| Status | Use `ativo` para permitir resolução pelo perfil. |
-
-O perfil aponta para o modelo, mas o processamento usa uma **versão publicada** no idioma do perfil.
+A API nunca devolve App Secret, token ou chave SendGrid em texto aberto.
 
 ---
 
-## 17. Versões de modelo
+## 10. Testar a conexão Omie
 
-Menu:
+No mesmo cartão da empresa:
 
-```text
-Documentos > Versões de Modelos
-```
+1. opcionalmente informe o código de uma OS existente;
+2. clique em **Testar conexão**;
+3. aguarde a mensagem de sucesso.
 
-### 17.1 Campos
+Sem código de OS, o teste valida se as credenciais estão cadastradas. Com uma OS, também valida uma consulta real na base do Omie.
 
-| Campo | Orientação |
-|---|---|
-| Modelo | Modelo pai. |
-| Versão | Identificador exclusivo por modelo e idioma. Ex.: `1.0.0`. |
-| Idioma | `pt-BR`, `en-US` ou `es-ES`. |
-| Motor | Use `template-seguro`. |
-| HTML do Documento | Estrutura do PDF. |
-| CSS | Estilos do documento. |
-| Assunto do E-mail | Assunto parametrizado. |
-| Corpo do E-mail | HTML do e-mail. |
-| Variáveis Permitidas | Raízes autorizadas, uma por linha. |
-| Status | Inicie em `rascunho`. |
+O cartão apresenta:
 
-### 17.2 Estados
+- última comunicação bem-sucedida;
+- App Key mascarada;
+- último erro de comunicação, quando houver.
 
-- `rascunho`: em edição;
-- `homologacao`: pronto para testes funcionais;
-- `publicado`: disponível para novos processamentos;
-- `substituido`: havia sido publicado, mas outra versão do mesmo idioma assumiu;
-- `arquivado`: fora de uso.
-
-### 17.3 Publicação
-
-Use a ação:
-
-```text
-Publicar
-```
-
-Ao publicar:
-
-- o conteúdo recebe hash;
-- usuário e data são registrados;
-- a versão se torna imutável;
-- uma versão publicada anterior do mesmo modelo/idioma é substituída;
-- novos processamentos passam a usar a nova versão;
-- faturas já preparadas preservam o snapshot anterior.
-
-Nunca edite diretamente uma versão publicada. Crie uma nova versão.
+Não avance para o webhook enquanto a conexão não estiver validada.
 
 ---
 
-## 18. Motor de template seguro
+## 11. Configurar o webhook no Omie
 
-O motor não executa JavaScript nem EJS.
+A página **Configurações** monta a URL específica de cada empresa.
 
-### 18.1 Variáveis padrão
+Exemplo:
+
+```text
+https://faturas-europartner.central.oondemand.online/api/integrations/omie/webhooks/ordem-servico/europartner-brasil
+```
+
+Copie a URL pelo botão **Copiar URL**.
+
+No Omie, configure o evento:
+
+```text
+OrdemServico.EtapaAlterada
+```
+
+Informe também o token gerado pela Central conforme o mecanismo disponível no cadastro do webhook:
+
+```text
+X-Webhook-Token: TOKEN_GERADO
+```
+
+ou, quando a ferramenta utilizar autorização Bearer:
+
+```text
+Authorization: Bearer TOKEN_GERADO
+```
+
+A Central aceita os dois formatos.
+
+### Teste de disponibilidade
+
+Depois de configurar o webhook, envie um teste ou ping pelo Omie. O endpoint deve responder com sucesso.
+
+Em seguida, consulte:
+
+**Operação > Eventos Omie**
+
+Um evento real deve aparecer como:
+
+- **aceito**, quando está aguardando processamento;
+- **processado**, quando originou ou atualizou uma fatura;
+- **ignorado**, quando o tópico ou a etapa não pertencem ao fluxo;
+- **duplicado**, quando o mesmo evento já havia sido recebido.
+
+---
+
+# Parte III — Modelos de documento
+
+## 12. Criar um modelo
+
+Abra:
+
+**Documentos > Modelos**
+
+A ativação pode criar o modelo inicial `invoice-padrao`. Ele serve como ponto de partida e deve ser revisado antes da publicação.
+
+Campos principais:
+
+- Código;
+- Nome;
+- Descrição;
+- Idiomas suportados;
+- Status.
+
+Um modelo precisa estar **Ativo** para ser utilizado.
+
+---
+
+## 13. Criar uma versão do modelo
+
+Abra:
+
+**Documentos > Versões de Modelos**
+
+Cadastre:
+
+- modelo relacionado;
+- versão, por exemplo `1.0.0`;
+- idioma;
+- motor `template-seguro`;
+- HTML do documento;
+- CSS;
+- assunto do e-mail;
+- corpo do e-mail;
+- variáveis permitidas.
+
+Idiomas disponíveis:
+
+- `pt-BR`;
+- `en-US`;
+- `es-ES`.
+
+### Variáveis principais
 
 ```text
 empresa
@@ -685,9 +487,7 @@ datas
 configuracoesPublicas
 ```
 
-### 18.2 Exemplos
-
-Valor simples:
+Exemplos:
 
 ```html
 {{empresa.razaoSocial}}
@@ -701,635 +501,426 @@ Condição:
 
 ```html
 {{#if cliente.pais}}
-<p>País: {{cliente.pais}}</p>
+  <p>País: {{cliente.pais}}</p>
 {{/if}}
 ```
 
-Lista:
+Lista de serviços:
 
 ```html
 {{#each servicos}}
-<tr>
-  <td>{{@index}}</td>
-  <td>{{this.cDescricao}}</td>
-  <td>{{this.nQtde}}</td>
-  <td>{{this.nValUnit}}</td>
-</tr>
+  <p>{{this.cDescricao}} — {{this.nQtde}} — {{this.nValUnit}}</p>
 {{/each}}
 ```
 
-### 18.3 Variáveis de cotação
-
-```text
-cotacao.oficial
-cotacao.efetiva
-cotacao.dataSolicitada
-cotacao.dataEfetiva
-cotacao.origem
-```
-
-### 18.4 Boas práticas
-
-- declare todas as raízes usadas em **Variáveis Permitidas**;
-- homologue campos reais retornados pelo Omie;
-- não dependa de HTML ou JavaScript vindo do cliente;
-- evite imagens externas instáveis;
-- use CSS apropriado para A4;
-- crie uma nova versão para cada alteração homologada.
+O motor não executa JavaScript ou EJS.
 
 ---
 
-## 19. Perfis de faturamento
+## 14. Publicar uma versão
 
-Menu:
+Depois de revisar e homologar o conteúdo:
 
-```text
-Configurações > Perfis de Faturamento
-```
+1. localize a versão;
+2. clique em **Publicar**;
+3. confirme a operação.
 
-O perfil é a regra que liga:
+Ao publicar:
 
-```text
-Empresa Omie + Cliente Omie + Etapa + Vigência
-```
+- a versão recebe hash, data e usuário;
+- fica imutável;
+- passa a ser usada em novos processamentos daquele modelo e idioma;
+- a versão publicada anteriormente para o mesmo idioma é substituída.
 
-à configuração:
+Para alterar um documento publicado, crie uma nova versão. Não tente editar a versão já publicada.
 
-```text
-Modelo + Idioma + Moeda + Cotação + E-mail + Anexos + Adiantamento
-```
+Deve existir pelo menos uma versão publicada para cada idioma utilizado nos perfis.
 
-### 19.1 Regra crítica de unicidade
+---
 
-Para cada evento deve existir **exatamente um perfil ativo e vigente** compatível com:
+# Parte IV — Perfis de faturamento
 
-- empresa;
-- código do cliente Omie;
-- data atual;
-- etapa de entrada, quando informada no perfil.
+## 15. Criar um perfil
 
-Nenhum perfil gera `BILLING_PROFILE_NOT_FOUND`.
+Abra:
 
-Mais de um perfil compatível gera `MULTIPLE_BILLING_PROFILES`.
+**Configurações > Perfis de Faturamento**
 
-Evite vigências sobrepostas para o mesmo cliente, empresa e etapa.
+O perfil liga:
 
-### 19.2 Identificação
+- Empresa Omie;
+- cliente do Omie;
+- etapa de entrada;
+- modelo e idioma;
+- moeda e regra de cotação;
+- e-mail e anexos;
+- geração de adiantamento.
+
+### Identificação
 
 | Campo | Orientação |
 |---|---|
-| Nome | Nome claro, incluindo cliente, moeda e finalidade. |
-| Empresa Omie | Base que receberá o evento. |
-| Código do Cliente Omie | Código interno do cliente na base Omie. Não é CNPJ. |
-| Cliente | Nome para consulta operacional. |
-| Modelo de Documento | Modelo ativo que possui versão publicada no idioma escolhido. |
-| Idioma | `pt-BR`, `en-US` ou `es-ES`. |
+| Nome | Nome claro do perfil |
+| Empresa Omie | Base responsável pela OS |
+| Código do Cliente Omie | Código exato do cliente na base |
+| Cliente | Nome para identificação visual |
+| Modelo de Documento | Modelo ativo e homologado |
+| Idioma | Deve possuir versão publicada |
+| Status | Use Rascunho durante a configuração e Ativo após homologar |
 
-Padrão recomendado para o nome:
+### Regra de vigência
 
-```text
-Cliente XPTO — USD — Invoice internacional
-```
+Informe:
 
-### 19.3 Moeda e PTAX
+- Vigente Desde;
+- Vigente Até, quando houver.
 
-| Campo | Opções | Comportamento |
-|---|---|---|
-| Moeda | BRL, USD, EUR | BRL usa fator 1; USD/EUR consultam PTAX. |
-| Data de Referência | data da OS, previsão da OS, processamento | Define a data solicitada ao BACEN. |
-| Campo PTAX | compra, venda | Seleciona qual cotação oficial será usada. |
-| Tipo de Ajuste | nenhum, percentual, valor fixo | Aplica ajuste sobre a cotação oficial. |
-| Ajuste | número | Percentual entre -100 e 100, ou valor fixo. |
+Para uma mesma empresa, cliente, etapa e data, deve existir **exatamente um perfil ativo compatível**.
 
-Cálculo percentual:
+Perfis sobrepostos podem gerar o erro:
 
 ```text
-cotação efetiva = cotação oficial × (1 + percentual ÷ 100)
+MULTIPLE_BILLING_PROFILES
 ```
 
-Cálculo por valor fixo:
+A ausência de perfil gera:
 
 ```text
-cotação efetiva = cotação oficial + ajuste
+BILLING_PROFILE_NOT_FOUND
 ```
 
-Quando não há PTAX publicada na data solicitada, a Central procura a última data disponível dentro do limite `BACEN_MAX_LOOKBACK_DAYS`.
+---
 
-### 19.4 Impostos
+## 16. Configurar moeda e cotação
 
-O campo **Regra de Impostos (JSON)** disponibiliza um objeto para o template na variável:
+### BRL
+
+A Central utiliza fator fixo:
 
 ```text
-impostos
+1
 ```
 
-Exemplo:
+### USD e EUR
 
-```json
-{
-  "descricao": "Withholding tax",
-  "percentual": 2.5,
-  "observacao": "Aplicável conforme contrato"
-}
-```
+A Central consulta o Fechamento PTAX no BACEN.
 
-A Central valida o JSON, mas a apresentação e os cálculos desejados precisam estar expressos no modelo homologado.
+Escolha a data de referência:
 
-### 19.5 Destinatários e cópias
+- Data da OS;
+- Previsão da OS;
+- Data do processamento.
 
-| Campo | Uso |
-|---|---|
-| Destinatários Adicionais | Endereços adicionados ao destinatário obtido do cliente/OS. |
-| Cópias | Cópias específicas do perfil. |
-| Cópias Padrão da Empresa | Cópias aplicadas pela configuração da empresa. |
+Escolha o campo PTAX:
 
-Use endereços separados por vírgula, ponto e vírgula ou nova linha.
+- Compra;
+- Venda.
 
-### 19.6 Política de anexos
+### Ajuste de cotação
 
 Opções:
 
-- `somente_fatura`: envia apenas o PDF gerado;
-- `fatura_e_permitidos`: inclui anexos da OS conforme allowlist;
-- `selecao_manual`: reservada para operação assistida.
+- Nenhum;
+- Percentual;
+- Valor fixo.
 
-A política `selecao_manual` não pode ser ativada no processamento automático atual.
-
-Para `fatura_e_permitidos`, configure:
+Exemplo percentual:
 
 ```text
-Extensões Permitidas: pdf,xml,xlsx,docx,jpg,png
+Cotação oficial: 5,00000000
+Ajuste: 2%
+Cotação efetiva: 5,10000000
 ```
 
-Opcionalmente:
+Exemplo de valor fixo:
 
+```text
+Cotação oficial: 5,00000000
+Ajuste: 0,15000000
+Cotação efetiva: 5,15000000
+```
+
+O ajuste percentual deve permanecer entre -100% e 100%.
+
+---
+
+## 17. Destinatários e cópias
+
+A Central combina:
+
+- e-mail do cliente no Omie;
+- e-mail informado na OS;
+- destinatários adicionais do perfil;
+- cópias padrão da Empresa Omie;
+- cópias do perfil.
+
+Separe múltiplos e-mails por vírgula, ponto e vírgula ou nova linha.
+
+A fatura não é enviada quando nenhum destinatário válido é encontrado.
+
+---
+
+## 18. Política de anexos
+
+Opções:
+
+### Somente fatura
+
+Envia apenas o PDF gerado pela Central.
+
+### Fatura e permitidos
+
+Além do PDF, pesquisa anexos da OS e aplica:
+
+- extensões permitidas;
 - padrões de nome incluídos;
-- padrões de nome excluídos.
+- padrões de nome excluídos;
+- limite total definido nas configurações gerais.
 
-Comece com `somente_fatura` durante a homologação.
-
-### 19.7 Adiantamento
-
-Campo:
+Extensões iniciais sugeridas:
 
 ```text
-Gerar Adiantamento
+pdf,xml,xlsx,docx,jpg,png
 ```
 
-Quando habilitado, confirme na Empresa Omie:
+### Seleção manual
+
+Ainda não deve ser ativada para processamento automático.
+
+---
+
+## 19. Adiantamento
+
+Marque **Gerar Adiantamento** quando o perfil exigir esse efeito.
+
+Antes de ativar, confirme na Empresa Omie:
 
 - categoria de adiantamento;
-- conta corrente de adiantamento;
-- permissões e configuração da base Omie;
-- regra esperada para a OS.
+- conta corrente de adiantamento.
 
-O processamento usa idempotência para evitar duplicação automática, mas a homologação deve confirmar o comportamento real da API e da base.
-
-### 19.8 Etapas específicas
-
-O perfil pode sobrescrever:
-
-- etapa de entrada;
-- etapa de sucesso;
-- etapa de erro.
-
-Deixe em branco para usar os valores padrão da Empresa Omie.
-
-A etapa de entrada do perfil também participa da seleção do perfil. O valor precisa ser igual ao recebido no webhook.
-
-### 19.9 Vigência e status
-
-- `Vigente Desde`: obrigatório;
-- `Vigente Até`: opcional;
-- a data final não pode ser anterior à inicial;
-- use `rascunho` enquanto configura;
-- use `ativo` somente depois de publicar o modelo e homologar os dados;
-- use `inativo` para interromper novas resoluções;
-- use `arquivado` para histórico.
+A Central consulta novamente a OS antes de gerar o adiantamento e utiliza controle de idempotência para evitar duplicações durante retries.
 
 ---
 
-# Parte IV — Webhook Omie
+# Parte V — Homologação
 
-## 20. URL por empresa
+## 20. Checklist antes do primeiro teste
 
-Formato:
+Confirme:
 
-```text
-POST https://BACKEND/api/integrations/omie/webhooks/ordem-servico/{codigoInterno}
-```
-
-Exemplo:
-
-```text
-POST https://faturas-europartner-api.exemplo.com/api/integrations/omie/webhooks/ordem-servico/europartner-brasil
-```
-
-Cabeçalho recomendado:
-
-```http
-X-Webhook-Token: TOKEN_DA_EMPRESA
-Content-Type: application/json
-```
-
-### Evento aceito
-
-```text
-OrdemServico.EtapaAlterada
-```
-
-Outros tópicos são persistidos como ignorados e não seguem para faturamento.
-
-### Validações realizadas
-
-- empresa existente;
-- status `ativa` ou `homologacao`;
-- token válido;
-- rate limit;
-- appKey do evento correspondente à credencial da empresa, quando enviada;
-- deduplicação por `eventId` ou hash;
-- sanitização antes da persistência.
+- [ ] URLs gerais revisadas;
+- [ ] chave única do SendGrid configurada;
+- [ ] remetente autorizado no SendGrid;
+- [ ] Empresa Omie em Homologação;
+- [ ] App Key e App Secret configurados;
+- [ ] token de webhook configurado;
+- [ ] teste de conexão concluído;
+- [ ] etapas de entrada, sucesso e erro confirmadas;
+- [ ] modelo ativo;
+- [ ] versão publicada no idioma do perfil;
+- [ ] perfil ativo e vigente para o cliente;
+- [ ] moeda e cotação revisadas;
+- [ ] destinatários revisados;
+- [ ] categoria e conta do adiantamento revisadas;
+- [ ] processamento automático inicialmente desabilitado.
 
 ---
 
-## 21. Teste de disponibilidade do webhook
-
-No PowerShell:
-
-```powershell
-$headers = @{
-  "X-Webhook-Token" = "TOKEN_DA_EMPRESA"
-  "Content-Type" = "application/json"
-}
-
-$body = '{"ping":"omie"}'
-
-Invoke-RestMethod `
-  -Method Post `
-  -Uri "http://localhost:4000/api/integrations/omie/webhooks/ordem-servico/europartner-brasil" `
-  -Headers $headers `
-  -Body $body
-```
-
-Resposta esperada:
-
-```json
-{
-  "message": "pong"
-}
-```
-
-Esse teste valida URL, empresa e token. Ele não cria uma fatura.
-
----
-
-## 22. Configuração no Omie
-
-Para cada base Omie:
-
-1. abra a configuração de webhooks da aplicação;
-2. cadastre a URL correspondente ao `codigoInterno` da empresa;
-3. selecione o evento de alteração de etapa da Ordem de Serviço;
-4. configure o token no cabeçalho suportado pela integração;
-5. salve;
-6. execute um teste controlado;
-7. confira o evento em **Operação > Eventos Omie**.
-
-Registre em inventário:
-
-| Empresa | Código interno | URL do webhook | Evento | Token ref | Situação |
-|---|---|---|---|---|---|
-| A preencher | A preencher | A preencher | OrdemServico.EtapaAlterada | A preencher | Homologação |
-
----
-
-# Parte V — Homologação ponta a ponta
-
-## 23. Preparação do caso de teste
-
-Escolha inicialmente:
-
-- uma Empresa Omie;
-- um cliente;
-- uma OS sem efeitos produtivos críticos;
-- um perfil BRL sem adiantamento;
-- política `somente_fatura`;
-- remetente e destinatário de homologação;
-- modelo simples e publicado.
-
-Confirme que:
-
-- a empresa está em `homologacao`;
-- o perfil está `ativo` e vigente;
-- existe somente um perfil compatível;
-- há uma versão `publicado` no idioma do perfil;
-- o modelo está `ativo`;
-- o worker está ligado;
-- o webhook responde ao ping;
-- o SendGrid aceita o remetente.
-
----
-
-## 24. Execução do teste
-
-1. mova a OS para a etapa de entrada;
-2. aguarde o webhook;
-3. abra **Operação > Eventos Omie**;
-4. confirme que o evento aparece como aceito;
-5. abra **Operação > Faturas** ou a **Esteira de Faturas**;
-6. acompanhe as etapas;
-7. abra o detalhe da fatura;
-8. confira as abas de OS/Cliente, Documento, Cotação, E-mail, Adiantamento, Integrações e Operação.
-
-Valide:
-
-- empresa e OS corretas;
-- cliente correto;
-- perfil correto;
-- moeda e cotação;
-- versão do modelo;
-- nome e hash do PDF;
-- anexo no Omie;
-- destinatários e cópias;
-- recebimento do e-mail;
-- adiantamento, quando habilitado;
-- etapa final da OS;
-- execuções independentes sem duplicação.
-
----
-
-## 25. Cenários mínimos de homologação
-
-### Empresa e segurança
-
-- token correto;
-- token incorreto;
-- empresa inativa;
-- appKey incompatível;
-- evento duplicado;
-- tópico fora do escopo.
-
-### Perfil
-
-- perfil inexistente;
-- dois perfis ativos sobrepostos;
-- vigência futura;
-- etapa incompatível;
-- modelo inativo;
-- versão não publicada no idioma.
-
-### Documento
-
-- BRL;
-- USD;
-- EUR;
-- campos ausentes no template;
-- variável não autorizada;
-- lista de serviços;
-- condição por país;
-- publicação de nova versão.
-
-### Efeitos
-
-- falha ao anexar;
-- falha ao enviar e-mail;
-- reenvio de e-mail;
-- reanexação;
-- falha no adiantamento;
-- reprocessamento do adiantamento;
-- retomada após retry;
-- confirmação de que efeitos concluídos não foram repetidos.
-
----
-
-## 26. Ações operacionais
-
-Na listagem de faturas estão disponíveis, conforme perfil de acesso:
-
-- **Reprocessar preparação**: refaz a preparação somente quando ainda é seguro substituir snapshots;
-- **Reprocessar**: retoma o fluxo pendente/falho;
-- **Reanexar no Omie**: envia novamente o PDF preservado;
-- **Reenviar e-mail**: reenvia sem refazer automaticamente os demais efeitos;
-- **Reprocessar adiantamento**: consulta o estado atual antes da nova tentativa.
-
-Em **Eventos Omie**:
-
-- **Reprocessar evento**: retoma eventos elegíveis;
-- eventos ignorados ou duplicados não podem ser reprocessados pela ação padrão.
-
-Antes de usar qualquer ação, leia a aba **Integrações** para identificar quais efeitos já foram concluídos.
-
----
-
-# Parte VI — Produção
-
-## 27. Checklist de entrada em produção
-
-### Infraestrutura
-
-- [ ] domínio e HTTPS configurados;
-- [ ] MongoDB produtivo e backup configurados;
-- [ ] segredos provisionados fora do repositório;
-- [ ] `NODE_ENV=production`;
-- [ ] `DEV_TOKEN` removido;
-- [ ] frontend sem `VITE_DEV_TOKEN`;
-- [ ] autenticação e RBAC produtivos validados;
-- [ ] logs e monitoramento configurados;
-- [ ] `INSTANCE_ID` único por réplica;
-- [ ] política de retenção e LGPD validada.
-
-### Empresas
-
-- [ ] todos os CNPJs conferidos;
-- [ ] credencial Omie testada;
-- [ ] token exclusivo por empresa;
-- [ ] etapas confirmadas;
-- [ ] remetentes verificados;
-- [ ] categoria e conta de adiantamento homologadas;
-- [ ] status alterado de `homologacao` para `ativa`.
-
-### Modelos
-
-- [ ] HTML revisado;
-- [ ] CSS revisado;
-- [ ] assunto e corpo do e-mail aprovados;
-- [ ] variáveis permitidas revisadas;
-- [ ] uma versão publicada por idioma utilizado;
-- [ ] PDFs aprovados pela Europartner.
-
-### Perfis
-
-- [ ] códigos de cliente conferidos;
-- [ ] vigências sem sobreposição;
-- [ ] moedas e PTAX aprovadas;
-- [ ] destinatários e cópias aprovados;
-- [ ] anexos aprovados;
-- [ ] adiantamento aprovado;
-- [ ] exatamente um perfil ativo por cenário.
-
-### Webhooks
-
-- [ ] URL produtiva cadastrada por empresa;
-- [ ] token configurado;
-- [ ] ping validado;
-- [ ] evento real recebido;
-- [ ] deduplicação validada;
-- [ ] rate limit compatível com o volume.
-
-### Operação
-
-- [ ] piloto realizado em uma empresa;
-- [ ] piloto realizado em BRL;
-- [ ] piloto realizado em USD e EUR, quando aplicável;
-- [ ] procedimento de retry treinado;
-- [ ] responsáveis por N1/N2/N3 definidos;
-- [ ] plano de rollback definido.
-
----
-
-## 28. Estratégia recomendada de rollout
-
-1. homologar uma base e um cliente BRL;
-2. ativar sem adiantamento;
-3. validar anexação e e-mail;
-4. ativar adiantamento;
-5. homologar USD;
-6. homologar EUR;
-7. adicionar os demais clientes da primeira empresa;
-8. monitorar por alguns dias;
-9. repetir por empresa;
-10. somente depois ativar todos os webhooks produtivos.
-
-Evite ativar simultaneamente as sete empresas antes de concluir o piloto.
-
----
-
-# Parte VII — Diagnóstico
-
-## 29. Erros comuns
-
-| Código/mensagem | Causa provável | Correção |
-|---|---|---|
-| `SECRET_NOT_CONFIGURED` | A variável informada na referência não existe. | Criar o segredo no ambiente e reiniciar o backend. |
-| `INVALID_SECRET_FORMAT` | O segredo Omie não contém JSON válido. | Corrigir aspas, chaves e formato JSON. |
-| `INVALID_OMIE_CREDENTIALS` | Não há `appKey` ou `appSecret`. | Corrigir o JSON da credencial. |
-| `INVALID_WEBHOOK_TOKEN` | Token ausente ou diferente. | Conferir cabeçalho e variável indicada por `webhookTokenRef`. |
-| `WEBHOOK_APP_MISMATCH` | appKey do evento não pertence à empresa. | Corrigir URL, empresa ou credencial do webhook. |
-| `COMPANY_NOT_AVAILABLE` | Empresa não existe, está inativa ou arquivada. | Conferir `codigoInterno` e status. |
-| `RATE_LIMIT` | Excesso de eventos no minuto. | Investigar repetição e ajustar limite com cautela. |
-| `BILLING_PROFILE_NOT_FOUND` | Nenhum perfil ativo/vigente compatível. | Conferir empresa, código de cliente, etapa, vigência e status. |
-| `MULTIPLE_BILLING_PROFILES` | Mais de um perfil compatível. | Encerrar sobreposição ou desativar perfil duplicado. |
-| `DOCUMENT_MODEL_INACTIVE` | Modelo do perfil não está ativo. | Ativar o modelo ou trocar o perfil. |
-| `PUBLISHED_TEMPLATE_NOT_FOUND` | Não há versão publicada no idioma. | Criar/homologar/publicar a versão correta. |
-| `TEMPLATE_VARIABLE_NOT_ALLOWED` | Template usa variável não declarada. | Adicionar a raiz autorizada ou remover a variável. |
-| `TEMPLATE_VARIABLE_MISSING` | Campo esperado não veio no contexto. | Conferir campo Omie e tornar o bloco condicional quando apropriado. |
-| Cotação indisponível | PTAX não encontrada no período de fallback. | Conferir moeda, data e `BACEN_MAX_LOOKBACK_DAYS`. |
-| Falha de PDF | HTML/CSS inválido, timeout ou navegador indisponível. | Simplificar modelo, conferir Puppeteer e aumentar timeout somente após diagnóstico. |
-| E-mail não enviado | Chave, remetente, destinatário ou limite de anexo. | Conferir SendGrid, remetente verificado e tamanho total. |
-
----
-
-## 30. Onde acompanhar cada problema
-
-| Tela | Uso |
-|---|---|
-| Visão Geral | KPIs e resumo da esteira. |
-| Eventos Omie | Recepção, deduplicação, tópico, etapa e motivo. |
-| Faturas | Estado consolidado e ações operacionais. |
-| Esteira de Faturas | Acompanhamento visual por etapa. |
-| Execuções de Integração | Tentativas, sistema, erro, duração e próxima tentativa. |
-| Cotações | Data solicitada/efetiva e valores do BACEN. |
-| Documentos de Fatura | Documentos e anexos preservados. |
-| Empresas Omie | Última comunicação e último erro. |
-
----
-
-## 31. Comandos úteis
-
-### Verificar dependências
-
-```powershell
-npm run check:dependencies --prefix backend
-npm ls --prefix backend
-npm ls --prefix frontend
-```
-
-### Validar código e configuração
-
-```powershell
-npm run check
-npm test
-npm run build --prefix frontend
-```
-
-### Reinstalação limpa do backend
-
-```powershell
-Remove-Item backend\node_modules -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item backend\package-lock.json -Force -ErrorAction SilentlyContinue
-npm install --prefix backend
-```
-
-### Reinstalação limpa do frontend
-
-```powershell
-Remove-Item frontend\node_modules -Recurse -Force -ErrorAction SilentlyContinue
-Remove-Item frontend\package-lock.json -Force -ErrorAction SilentlyContinue
-npm install --prefix frontend
-```
-
-Não execute `npm audit fix --force` sem revisão técnica, porque o comando pode instalar versões incompatíveis.
-
----
-
-# Anexo A — Inventário de configuração
-
-Preencha uma linha para cada Empresa Omie.
-
-| Empresa | CNPJ | Código interno | Secret ref Omie | Webhook token ref | E-mail secret ref | Entrada | Sucesso | Erro | Categoria adiantamento | Conta adiantamento | Status |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| | | | | | | | | | | | |
-
----
-
-# Anexo B — Inventário de perfis
-
-| Empresa | Cliente | Código cliente Omie | Etapa | Modelo | Versão/idioma | Moeda | PTAX | Ajuste | Anexos | Adiantamento | Vigência | Status |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| | | | | | | | | | | | | |
-
----
-
-# Anexo C — Evidências de homologação
-
-Para cada caso testado, preserve:
-
-- número e código interno da OS;
-- ID do evento;
-- ID da fatura;
-- empresa e perfil resolvidos;
-- versão e hash do modelo;
-- data e valor da cotação;
-- hash do PDF;
+## 21. Executar a homologação ponta a ponta
+
+Use uma OS exclusiva de teste.
+
+1. confirme o cliente e os e-mails no Omie;
+2. confirme a etapa atual da OS;
+3. mova a OS para a etapa de entrada configurada;
+4. abra **Operação > Eventos Omie**;
+5. confirme o recebimento do evento;
+6. abra **Operação > Faturas** ou **Operação > Esteira de Faturas**;
+7. acompanhe as etapas;
+8. valide o PDF gerado;
+9. confirme o anexo na OS;
+10. confirme o recebimento do e-mail;
+11. confirme o adiantamento, quando habilitado;
+12. confirme a mudança da OS para a etapa de sucesso;
+13. revise as Execuções de Integração.
+
+### Evidências mínimas
+
+Guarde:
+
+- número e código da OS;
+- empresa e cliente;
+- modelo, versão e idioma;
+- moeda, data e cotação;
+- hash e nome do PDF;
 - ID do anexo no Omie;
-- ID da mensagem do provedor de e-mail;
-- confirmação do adiantamento;
+- destinatários e cópias;
+- ID da mensagem do SendGrid;
+- situação do adiantamento;
 - etapa final da OS;
-- resultado e observações do homologador.
+- data e responsável pela homologação.
 
 ---
 
-## 32. Critério de conclusão da configuração
+## 22. Entrada em produção
 
-A configuração é considerada concluída quando, para cada empresa ativada:
+Após aprovar a homologação:
 
-1. o webhook está autenticado;
-2. a credencial Omie foi validada;
-3. existe exatamente um perfil para cada cliente/etapa atendido;
-4. o modelo correto está publicado no idioma necessário;
-5. BRL, USD e EUR foram homologados quando aplicáveis;
-6. o PDF foi gerado e anexado;
-7. o e-mail foi recebido pelos destinatários corretos;
-8. o adiantamento foi criado quando previsto;
-9. a etapa da OS foi atualizada corretamente;
-10. retries e ações manuais foram testados sem duplicação de efeitos.
+1. altere a Empresa Omie de **Homologação** para **Ativa**;
+2. confirme os perfis ativos;
+3. abra **Configurações**;
+4. habilite **Processamento automático**;
+5. clique em **Salvar configurações gerais**;
+6. acompanhe os primeiros eventos e faturas.
+
+Faça o rollout uma empresa por vez. Não ative as sete bases simultaneamente sem validar o comportamento da primeira.
+
+---
+
+# Parte VI — Operação diária
+
+## 23. Visão Geral
+
+A página inicial apresenta:
+
+- indicadores da operação;
+- faturas por etapa;
+- falhas e retries;
+- acesso aos detalhes.
+
+Use os filtros por:
+
+- empresa;
+- status;
+- moeda;
+- cliente.
+
+---
+
+## 24. Detalhes da fatura
+
+No detalhe da fatura estão disponíveis as abas:
+
+- Resumo;
+- OS / Cliente;
+- Documento;
+- Cotação;
+- E-mail;
+- Adiantamento;
+- Integrações;
+- Operação.
+
+Antes de reprocessar, identifique exatamente qual etapa falhou.
+
+---
+
+## 25. Ações de reprocessamento
+
+### Reprocessar preparação
+
+Use somente quando a preparação falhou antes de ocorrer qualquer efeito externo.
+
+Não utilize depois de existir PDF, anexo, e-mail ou adiantamento confirmado.
+
+### Reprocessar
+
+Retoma o fluxo preservando etapas já concluídas.
+
+### Reanexar no Omie
+
+Reenvia o PDF já preservado para a OS.
+
+### Reenviar e-mail
+
+Envia novamente o e-mail sem gerar novo PDF, novo anexo ou novo adiantamento.
+
+### Reprocessar adiantamento
+
+Consulta o estado atual da OS e tenta novamente somente o adiantamento.
+
+### Reprocessar evento
+
+Disponível em **Operação > Eventos Omie** para eventos com falha corrigível.
+
+Eventos ignorados ou duplicados não devem ser reprocessados.
+
+---
+
+## 26. Erros comuns
+
+| Código ou mensagem | Ação recomendada |
+|---|---|
+| `SENDGRID_NOT_CONFIGURED` | Abrir Configurações e cadastrar a API Key única do SendGrid |
+| `OMIE_CREDENTIALS_NOT_CONFIGURED` | Informar App Key e App Secret da Empresa Omie |
+| `WEBHOOK_TOKEN_NOT_CONFIGURED` | Gerar ou informar o token do webhook |
+| `INVALID_WEBHOOK_TOKEN` | Atualizar o token no Omie ou gerar um novo token |
+| `WEBHOOK_APP_MISMATCH` | Confirmar se o webhook aponta para a empresa correta |
+| `BILLING_PROFILE_NOT_FOUND` | Criar ou ativar o perfil para empresa, cliente e etapa |
+| `MULTIPLE_BILLING_PROFILES` | Encerrar a sobreposição de perfis vigentes |
+| `PUBLISHED_TEMPLATE_NOT_FOUND` | Publicar uma versão no idioma do perfil |
+| `DOCUMENT_MODEL_INACTIVE` | Ativar o modelo do perfil |
+| `PTAX_NOT_FOUND` | Revisar URL do BACEN, data e busca retroativa |
+| `EMAIL_RECIPIENT_REQUIRED` | Corrigir os e-mails do cliente, OS ou perfil |
+| `PREPARATION_ALREADY_EFFECTIVE` | Usar reprocessamento seletivo em vez de refazer a preparação |
+| `RATE_LIMIT` | Revisar volume de eventos ou limite de webhooks por minuto |
+
+---
+
+## 27. Troca de credenciais
+
+### App Key ou App Secret
+
+1. abra **Configurações**;
+2. localize a Empresa Omie;
+3. informe apenas os novos valores;
+4. salve;
+5. teste a conexão.
+
+### Token do webhook
+
+1. gere um novo token;
+2. copie-o imediatamente;
+3. atualize o webhook no Omie;
+4. salve as credenciais;
+5. faça um teste de evento.
+
+### Chave SendGrid
+
+1. informe a nova API Key no bloco SendGrid;
+2. salve as configurações gerais;
+3. execute uma homologação de envio.
+
+---
+
+## 28. Checklist periódico
+
+Semanalmente:
+
+- [ ] revisar faturas em falha;
+- [ ] revisar eventos ignorados;
+- [ ] revisar retries pendentes;
+- [ ] verificar erros de conexão Omie;
+- [ ] confirmar envio pelo SendGrid.
+
+Mensalmente:
+
+- [ ] revisar perfis vigentes;
+- [ ] revisar clientes e etapas;
+- [ ] revisar remetentes autorizados;
+- [ ] revisar modelos publicados;
+- [ ] revisar limites e volume da operação.
+
+Quando houver mudança no processo:
+
+- [ ] criar nova versão do modelo;
+- [ ] homologar antes de publicar;
+- [ ] evitar editar regras vigentes sem data de corte;
+- [ ] registrar a decisão e o responsável.
+
+---
+
+## 29. Regra de segurança operacional
+
+Nunca envie App Secret, token de webhook ou chave SendGrid por e-mail, planilha, chamado público ou mensagem sem proteção.
+
+Cadastre os valores diretamente na página **Configurações**. Depois de salvos, os segredos não são exibidos novamente pela Central.
