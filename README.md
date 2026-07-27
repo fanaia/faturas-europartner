@@ -2,6 +2,12 @@
 
 Central Oon exclusiva para a Europartner, construída sobre o `oonCore` a partir do artefato `fatura-europartner.central.blueprint.json`.
 
+## Manual de configuração
+
+O roteiro completo de ambiente, empresas Omie, segredos, modelos, perfis, webhooks, homologação e entrada em produção está em:
+
+- [Manual de Configuração da Central Faturas Europartner](docs/MANUAL_CONFIGURACAO.md)
+
 ## Fluxo operacional
 
 1. O Omie envia `OrdemServico.EtapaAlterada` para o webhook da empresa.
