@@ -2,6 +2,7 @@ const { model } = require("../lib/model");
 const { normalizeError, OperationalError } = require("../lib/error");
 const log = require("../lib/log");
 const { nextRetryAt } = require("./retry");
+const { getCentralConfiguration } = require("./configurationService");
 const { ensureInvoice, prepareInvoice, loadPrepared } = require("./invoicePreparation");
 const { processEffects } = require("./invoiceEffects");
 const {
@@ -12,11 +13,14 @@ const {
 } = require("./invoiceContext");
 
 async function handleFailure(fatura, error) {
+  const configuration = await getCentralConfiguration();
   const normalized = error.normalized || normalizeError(error);
-  const canRetry = normalized.transient && fatura.tentativas < Number(process.env.PROCESSOR_MAX_ATTEMPTS || 5);
+  const canRetry = normalized.transient && fatura.tentativas < Number(configuration.processorMaxAttempts || 5);
   fatura.status = canRetry ? "aguardando_retry" : "falha";
   fatura.etapaAtual = canRetry ? "aguardando_retry" : "falha_operacional";
-  fatura.proximaTentativaEm = canRetry ? nextRetryAt(fatura.tentativas) : undefined;
+  fatura.proximaTentativaEm = canRetry
+    ? nextRetryAt(fatura.tentativas, Date.now(), Number(configuration.processorRetryBaseMs || 30000))
+    : undefined;
   fatura.ultimoErroCodigo = normalized.code;
   fatura.ultimoErroMensagem = normalized.message;
   fatura.acaoRecomendada = canRetry ? "Aguardar o retry automático ou executar novamente." : "Corrigir dados/configuração e reprocessar a etapa.";
@@ -28,7 +32,8 @@ async function handleFailure(fatura, error) {
 
 async function processInvoiceById(id) {
   const Fatura = model("Fatura");
-  const lockUntil = new Date(Date.now() + Number(process.env.PROCESSOR_LOCK_MS || 300_000));
+  const configuration = await getCentralConfiguration();
+  const lockUntil = new Date(Date.now() + Number(configuration.processorLockMs || 300000));
   const instance = process.env.INSTANCE_ID || `pid-${process.pid}`;
   const fatura = await Fatura.findOneAndUpdate(
     {
@@ -56,7 +61,8 @@ async function processInvoiceById(id) {
 async function processEventById(id) {
   const Evento = model("EventoWebhook");
   const Empresa = model("EmpresaOmie");
-  const lockUntil = new Date(Date.now() + Number(process.env.PROCESSOR_LOCK_MS || 300_000));
+  const configuration = await getCentralConfiguration();
+  const lockUntil = new Date(Date.now() + Number(configuration.processorLockMs || 300000));
   const instance = process.env.INSTANCE_ID || `pid-${process.pid}`;
   const event = await Evento.findOneAndUpdate(
     {
@@ -108,7 +114,9 @@ async function processEventById(id) {
     const normalized = normalizeError(error);
     event.status = normalized.transient ? "aceito" : "falha_validacao";
     event.motivo = normalized.message;
-    event.proximaTentativaEm = normalized.transient ? nextRetryAt(event.tentativas) : undefined;
+    event.proximaTentativaEm = normalized.transient
+      ? nextRetryAt(event.tentativas, Date.now(), Number(configuration.processorRetryBaseMs || 30000))
+      : undefined;
     event.lockUntil = undefined;
     event.lockedBy = undefined;
     await event.save();
