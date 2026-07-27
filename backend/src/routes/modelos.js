@@ -2,7 +2,6 @@ const { defineRoutes } = require("@oondemand/oon-core-back");
 const { model } = require("../lib/model");
 const { renderPdf } = require("../services/documentService");
 const { consultarOS, consultarCliente, consultarPais } = require("../integrations/omie/service");
-const { readOmieCredentials } = require("../lib/secrets");
 const { OperationalError } = require("../lib/error");
 const { quoteReferenceDate, templateVariables } = require("../services/faturaProcessor");
 const { getOrFetchQuote } = require("../integrations/bacen/service");
@@ -51,7 +50,6 @@ defineRoutes("/api/modelos", (router) => {
     const empresa = await model("EmpresaOmie").findById(req.body?.empresaOmieId);
     const profile = await model("PerfilFaturamento").findById(req.body?.perfilFaturamentoId);
     if (!version || !empresa || !profile) throw new OperationalError("Versão, empresa e perfil são obrigatórios.", { code: "PREVIEW_CONTEXT_REQUIRED", statusCode: 400 });
-    readOmieCredentials(empresa.secretRef);
     const os = await consultarOS(empresa, req.body?.codigoOS);
     const cliente = await consultarCliente(empresa, os.Cabecalho.nCodCli);
     const pais = cliente.codigo_pais ? await consultarPais(empresa, cliente.codigo_pais) : null;
