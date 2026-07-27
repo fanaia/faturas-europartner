@@ -2,16 +2,15 @@ const axios = require("axios");
 const { model } = require("../../lib/model");
 const { formatBacenDate, startOfUtcDay, addUtcDays } = require("../../lib/date");
 const { OperationalError, normalizeError } = require("../../lib/error");
+const { getCentralConfiguration } = require("../../services/configurationService");
 
-const client = axios.create({
-  baseURL: process.env.BACEN_PTAX_URL || "https://olinda.bcb.gov.br/olinda/servico/PTAX/versao/v1/odata",
-  timeout: Number(process.env.BACEN_TIMEOUT_MS || 15_000),
-});
-
-async function queryDay(currency, date) {
+async function queryDay(currency, date, runtimeConfiguration) {
+  const configuration = runtimeConfiguration || (await getCentralConfiguration());
   const formatted = formatBacenDate(date);
+  const base = String(configuration.bacenPtaxUrl || "").replace(/\/+$/, "");
   try {
-    const response = await client.get("/CotacaoMoedaDia(moeda=@moeda,dataCotacao=@dataCotacao)", {
+    const response = await axios.get(`${base}/CotacaoMoedaDia(moeda=@moeda,dataCotacao=@dataCotacao)`, {
+      timeout: Number(configuration.bacenTimeoutMs || 15000),
       params: {
         "@moeda": `'${currency}'`,
         "@dataCotacao": `'${formatted}'`,
@@ -59,10 +58,11 @@ async function getOrFetchQuote(currency, requestedDate) {
     );
   }
 
-  const maxLookback = Number(process.env.BACEN_MAX_LOOKBACK_DAYS || 30);
+  const configuration = await getCentralConfiguration();
+  const maxLookback = Number(configuration.bacenMaxLookbackDays || 30);
   for (let offset = 0; offset <= maxLookback; offset += 1) {
     const effectiveDate = addUtcDays(requested, -offset);
-    const quote = await queryDay(currency, effectiveDate);
+    const quote = await queryDay(currency, effectiveDate, configuration);
     if (!quote) continue;
     return CotacaoMoeda.findOneAndUpdate(
       { chaveCotacao: keyPrefix },
