@@ -1,0 +1,31 @@
+{
+  "name": "faturas-europartner-backend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Backend da Central Faturas Europartner — domínio sobre @oondemand/oon-core-back.",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "oonCore-back dev",
+    "start": "oonCore-back start",
+    "activate": "oonCore-back activate",
+    "build:image": "oonCore-back build:image",
+    "k8s:render": "oonCore-back k8s:render",
+    "deploy": "oonCore-back deploy",
+    "test": "node --test test/*.test.js",
+    "check": "node scripts/check.js",
+    "check:dependencies": "node -e \"require('sanitize-html')('<p>ok</p>')\""
+  },
+  "dependencies": {
+    "@oondemand/oon-core-back": "0.3.36",
+    "@sendgrid/mail": "^8.1.5",
+    "archiver": "^7.0.1",
+    "axios": "^1.7.7",
+    "puppeteer": "^24.0.0",
+    "sanitize-html": "2.17.0"
+  },
+  "overrides": {
+    "sanitize-html": "2.17.0"
+  }
+}
