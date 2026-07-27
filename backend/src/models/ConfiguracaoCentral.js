@@ -13,7 +13,7 @@ const entry = defineModel({
     bacenPtaxUrl: fields.string({ required: true, label: "URL PTAX BACEN" }),
     bacenTimeoutMs: fields.number({ required: true, label: "Timeout BACEN (ms)", default: 15000 }),
     bacenMaxLookbackDays: fields.number({ required: true, label: "Busca retroativa PTAX (dias)", default: 30 }),
-    processorEnabled: fields.boolean({ required: true, label: "Processamento automático", default: true }),
+    processorEnabled: fields.boolean({ required: true, label: "Processamento automático", default: false }),
     processorPollIntervalMs: fields.number({ required: true, label: "Intervalo do worker (ms)", default: 5000 }),
     processorBatchSize: fields.number({ required: true, label: "Tamanho do lote", default: 10 }),
     processorLockMs: fields.number({ required: true, label: "Tempo de lock (ms)", default: 300000 }),
