@@ -24,7 +24,7 @@ Credenciais Omie, tokens de webhook, chave única do SendGrid, URLs de integraç
 
 A configuração funcional é realizada nesta ordem:
 
-1. abrir **Configurações** e revisar URLs, SendGrid e parâmetros operacionais;
+1. abrir **Configurações > Configurações** e revisar URLs, SendGrid e parâmetros operacionais;
 2. cadastrar as Empresas Omie;
 3. cadastrar, pela página **Configurações**, App Key, App Secret e token de webhook de cada empresa;
 4. testar a conexão;
@@ -32,6 +32,8 @@ A configuração funcional é realizada nesta ordem:
 6. criar os perfis de faturamento;
 7. configurar os webhooks no Omie;
 8. homologar uma OS antes de ativar o processamento produtivo.
+
+O processamento automático nasce desabilitado e deve ser habilitado somente após a homologação.
 
 A Central utiliza apenas uma conta SendGrid. Os remetentes e cópias podem continuar sendo definidos por Empresa Omie e por perfil de faturamento.
 
