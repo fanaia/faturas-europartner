@@ -6,9 +6,12 @@ const { renderPdf, renderEmail } = require("./documentService");
 const { selectAttachments } = require("./attachmentPolicy");
 const { sendInvoiceEmail } = require("./emailService");
 const { runStep } = require("./executionService");
+const { getCentralConfiguration } = require("./configurationService");
 
 async function processEffects(fatura, prepared) {
   const { empresa, profile, version, quote, os, cliente, pais } = prepared;
+  const configuration = await getCentralConfiguration();
+  const maxAttachmentsBytes = Number(configuration.emailMaxAttachmentsBytes || 20000000);
   const variables = templateVariables({ empresa, profile, os, cliente, pais, quote, effectiveQuote: fatura.cotacaoEfetiva });
 
   fatura.etapaAtual = "gerando_documento";
@@ -57,9 +60,13 @@ async function processEffects(fatura, prepared) {
       if (profile.politicaAnexos === "fatura_e_permitidos") {
         const list = await omie.listarAnexos(empresa, fatura.codigoOS);
         const candidates = list.filter((item) => String(item.cNomeArquivo || "") !== fatura.nomeArquivo);
-        const selectedMetadata = selectAttachments(candidates.map((item) => ({ ...item, filename: item.cNomeArquivo, size: item.nTamanhoArquivo || 0 })), profile);
+        const selectedMetadata = selectAttachments(
+          candidates.map((item) => ({ ...item, filename: item.cNomeArquivo, size: item.nTamanhoArquivo || 0 })),
+          profile,
+          maxAttachmentsBytes
+        );
         extras = await Promise.all(selectedMetadata.map((item) => omie.obterAnexo(empresa, item)));
-        extras = selectAttachments(extras, profile);
+        extras = selectAttachments(extras, profile, maxAttachmentsBytes);
       }
       const osEmail = os?.Email?.cEnviarPara || os?.email?.cEnviarPara || "";
       const result = await sendInvoiceEmail({ empresa, profile, fatura, clientEmail: cliente.email, osEmail, subject: email.subject, html: email.html, pdfBuffer, extraAttachments: extras });
