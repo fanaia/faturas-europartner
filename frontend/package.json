@@ -4,9 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "oonCore-front dev",
-    "build": "oonCore-front build",
-    "preview": "oonCore-front preview",
+    "dev": "vite dev",
+    "build": "vite build",
+    "preview": "vite preview",
     "sync:metadata": "oonCore-front sync:metadata",
     "check": "node scripts/check.mjs"
   },
