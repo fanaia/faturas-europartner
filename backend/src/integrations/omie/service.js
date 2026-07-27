@@ -3,6 +3,7 @@ const archiver = require("archiver");
 const { PassThrough } = require("node:stream");
 const { callOmie } = require("./client");
 const { md5 } = require("../../lib/hash");
+const { getCentralConfiguration } = require("../../services/configurationService");
 
 async function consultarOS(empresa, codigoOS) {
   return callOmie(empresa, "servicos/os/", "ConsultarOS", { nCodOS: Number(codigoOS) || codigoOS });
@@ -58,12 +59,18 @@ async function listarAnexos(empresa, codigoOS) {
 }
 
 async function obterAnexo(empresa, item) {
-  const response = await callOmie(empresa, "geral/anexo/", "ObterAnexo", {
-    cTabela: item.cTabela || "ordem-servico",
-    nId: item.nId,
-    nIdAnexo: item.nIdAnexo,
+  const [response, configuration] = await Promise.all([
+    callOmie(empresa, "geral/anexo/", "ObterAnexo", {
+      cTabela: item.cTabela || "ordem-servico",
+      nId: item.nId,
+      nIdAnexo: item.nIdAnexo,
+    }),
+    getCentralConfiguration(),
+  ]);
+  const download = await axios.get(response.cLinkDownload, {
+    responseType: "arraybuffer",
+    timeout: Number(configuration.omieTimeoutMs || 20000),
   });
-  const download = await axios.get(response.cLinkDownload, { responseType: "arraybuffer", timeout: 20_000 });
   return {
     filename: response.cNomeArquivo || item.cNomeArquivo,
     fileBuffer: Buffer.from(download.data),
